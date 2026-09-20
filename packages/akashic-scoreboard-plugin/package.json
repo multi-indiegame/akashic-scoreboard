@@ -1,6 +1,6 @@
 {
   "name": "@multi-indiegame/akashic-scoreboard-plugin",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "プレイ記録を受け取るための Akashic Engine 拡張（コンテンツ実行基盤側のプラグイン）",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
@@ -34,7 +34,7 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@multi-indiegame/akashic-scoreboard": "^0.1.0"
+    "@multi-indiegame/akashic-scoreboard": "^1.0.0"
   },
   "devDependencies": {
     "rimraf": "^6.0.1",

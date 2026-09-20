@@ -1,6 +1,6 @@
 {
   "name": "@multi-indiegame/akashic-scoreboard",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "プレイ記録を実行基盤へ報告するための Akashic Engine 拡張ライブラリ（コンテンツ側）",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",

@@ -1,6 +1,6 @@
 {
   "name": "@multi-indiegame/akashic-scoreboard-serve",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "@multi-indiegame/akashic-scoreboard を akashic serve の上で動作確認するためのバックエンド",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
@@ -37,7 +37,7 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@multi-indiegame/akashic-scoreboard-plugin": "^0.1.0"
+    "@multi-indiegame/akashic-scoreboard-plugin": "^1.0.0"
   },
   "devDependencies": {
     "@akashic/akashic-cli-serve": "^2.0.21",
