@@ -151,10 +151,6 @@ export class ScoreboardPlugin {
     _record(subject: ScoreRecordSubject, patch: ScoreRecordPatch): void {
         const id = subjectId(subject);
         const existing = this._knownKeys[id];
-        if (!existing && this._isFull()) {
-            this._reportTooManySubjects(subject, patch);
-            return;
-        }
         const known =
             existing ?? (Object.create(null) as { [key: string]: true });
         // WHY: コンテンツから来た値はライブラリを経由したとは限らない（同一
@@ -163,27 +159,37 @@ export class ScoreboardPlugin {
         const rejected: RejectedRecordEntry[] = normalized.dropped.map(
             (entry) => ({ key: entry.key, reason: entry.reason }),
         );
-        const keys = Object.keys(normalized.record);
-        // WHY: 何も記録しない報告で相手を控え始めない。実在しない playerId を
-        // 並べるだけで控えが増えるのを防ぐ
-        if (keys.length > 0) {
-            this._knownKeys[id] = known;
+        const added: string[] = [];
+        for (const key of Object.keys(normalized.record)) {
+            if (normalized.record[key] === null) {
+                delete known[key];
+            } else if (known[key] !== true) {
+                added.push(key);
+            }
+        }
+        // WHY: まだ記録を持たない相手が新しく記録を持つときだけ、相手の数を
+        // 数える。キーを消すだけの報告や、何も通らなかった報告では数えない
+        if (!existing && added.length > 0 && this._isFull()) {
+            for (const key of added) {
+                rejected.push({ key: key, reason: "TooManySubjects" });
+            }
+            this._report(subject, {}, rejected);
+            return;
+        }
+        for (const key of added) {
+            known[key] = true;
         }
         // WHY: 控えるのは報告する前。バックエンドが例外を出した分を控えないと、
         // コンテンツ側の控えとずれて、正当な記録が捨てられる
-        for (const key of keys) {
-            if (normalized.record[key] === null) {
-                delete known[key];
-            } else {
-                known[key] = true;
-            }
+        //
+        // WHY: 記録が 1 つも残らない相手の枠は手放す。持ち続けると、キーを
+        // 消すだけの報告を繰り返して相手の数の上限を埋められる
+        if (Object.keys(known).length > 0) {
+            this._knownKeys[id] = known;
+        } else if (existing) {
+            delete this._knownKeys[id];
         }
-        try {
-            this._backend.record(subject, normalized.record, rejected);
-        } catch (_err) {
-            // WHY: 実行基盤の都合でコンテンツの進行を止めない。記録が残らない
-            // ことの影響は、そのプレイに閉じる
-        }
+        this._report(subject, normalized.record, rejected);
     }
 
     _isFull(): boolean {
@@ -193,27 +199,16 @@ export class ScoreboardPlugin {
         );
     }
 
-    /**
-     * WHY: 黙って捨てると、実行基盤には何も残らない。上限に達したことが
-     * 分かるよう、破棄した理由として報告する。
-     */
-    _reportTooManySubjects(
+    _report(
         subject: ScoreRecordSubject,
-        patch: ScoreRecordPatch,
+        record: ScoreRecordPatch,
+        rejected: RejectedRecordEntry[],
     ): void {
-        const normalized = normalizeRecordPatch(patch, this._limits);
-        const rejected: RejectedRecordEntry[] = [];
-        const dropped: DroppedEntry[] = normalized.dropped;
-        for (const key of Object.keys(normalized.record)) {
-            rejected.push({ key: key, reason: "TooManySubjects" });
-        }
-        for (const entry of dropped) {
-            rejected.push({ key: entry.key, reason: entry.reason });
-        }
         try {
-            this._backend.record(subject, {}, rejected);
+            this._backend.record(subject, record, rejected);
         } catch (_err) {
-            // 上に同じ
+            // WHY: 実行基盤の都合でコンテンツの進行を止めない。記録が残らない
+            // ことの影響は、そのプレイに閉じる
         }
     }
 }

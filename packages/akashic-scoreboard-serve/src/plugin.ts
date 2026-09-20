@@ -57,6 +57,8 @@ const serve = (): ServeGlobals | null => {
  */
 interface SharedState {
     latest: DecodedSnapshot | null;
+    /** いま画面に出しているプレイ。切り替わったら控えを捨てる */
+    playId: number | null;
     render: (() => void) | null;
     attached: WeakSet<GameContentLike>;
 }
@@ -67,6 +69,7 @@ const shared: SharedState = ((): SharedState => {
     };
     return (host.__akashicScoreboardServe ??= {
         latest: null,
+        playId: null,
         render: null,
         attached: new WeakSet<GameContentLike>(),
     });
@@ -305,6 +308,15 @@ function section(
 }
 
 function accept(decoded: DecodedSnapshot): void {
+    // WHY: 別のプレイ宛のスナップショットは出さない。古いプレイの再送が届いても、
+    // いま開いているプレイの記録として読まれないようにする
+    if (
+        shared.playId != null &&
+        decoded.playId != null &&
+        decoded.playId !== shared.playId
+    ) {
+        return;
+    }
     // WHY: 到着が入れ替わっても、古い内容で新しい内容を上書きしない
     const latest = shared.latest;
     if (
@@ -329,6 +341,17 @@ function attach(): boolean {
     const content = serve()?.store?.currentLocalInstance?.gameContent;
     if (!content || !content.onTick) {
         return false;
+    }
+    // WHY: プレイが変わったら、前のプレイの記録を消す。新しいプレイがまだ
+    // 何も記録していないときは拾い直しても何も来ないので、消さないと古い内容が
+    // 残り続ける
+    const playId = serve()?.store?.currentPlay?.playId ?? null;
+    if (playId !== shared.playId) {
+        shared.playId = playId;
+        shared.latest = null;
+        if (shared.render) {
+            shared.render();
+        }
     }
     if (shared.attached.has(content)) {
         return true;

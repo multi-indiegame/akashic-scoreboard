@@ -94,19 +94,24 @@ const _sentKeys: { [subject: string]: { [key: string]: true } } =
 
 let _sentCount = 0;
 
-function sentKeysOf(
-    subject: string,
-    limit: number,
-): { [key: string]: true } | null {
-    const known = _sentKeys[subject];
-    if (known) {
-        return known;
+/**
+ * この報告で新しく増えるキー。相手の数を数えてよいかの判定に使う。
+ *
+ * WHY: キーを消すだけの報告では記録が増えないので、相手の枠も要らない。
+ */
+function addedKeys(
+    known: { [key: string]: true },
+    record: ScoreRecordPatch,
+): string[] {
+    const added: string[] = [];
+    const keys = Object.keys(record);
+    for (let i = 0; i < keys.length; i++) {
+        const key = keys[i];
+        if (record[key] !== null && known[key] !== true) {
+            added.push(key);
+        }
     }
-    // WHY: 実行基盤も同じ数で打ち切る。ここで控えを増やしても記録されない
-    if (_sentCount >= limit) {
-        return null;
-    }
-    return Object.create(null) as { [key: string]: true };
+    return added;
 }
 
 function remember(
@@ -114,10 +119,6 @@ function remember(
     known: { [key: string]: true },
     record: ScoreRecordPatch,
 ): void {
-    if (!_sentKeys[subject]) {
-        _sentKeys[subject] = known;
-        _sentCount++;
-    }
     const keys = Object.keys(record);
     for (let i = 0; i < keys.length; i++) {
         if (record[keys[i]] === null) {
@@ -125,6 +126,18 @@ function remember(
         } else {
             known[keys[i]] = true;
         }
+    }
+    const stored = _sentKeys[subject] !== undefined;
+    // WHY: 記録が 1 つも残らない相手は控えない。実行基盤も枠を手放すので、
+    // 控え続けると数え方がずれる
+    if (Object.keys(known).length > 0) {
+        if (!stored) {
+            _sentKeys[subject] = known;
+            _sentCount++;
+        }
+    } else if (stored) {
+        delete _sentKeys[subject];
+        _sentCount--;
     }
 }
 
@@ -286,18 +299,21 @@ function report(
     if (!isActiveInstance()) {
         return null;
     }
-    const known = sentKeysOf(
-        subject,
-        readLimit(external.limits, "subjectsPerPlay"),
-    );
-    if (!known) {
-        warnDropped([{ key: subject, reason: "TooManySubjects" }]);
-        return null;
-    }
+    const existing = _sentKeys[subject];
+    const known = existing ?? (Object.create(null) as { [key: string]: true });
     const normalized = normalizeRecordPatch(patch, external.limits, known);
     warnDropped(normalized.dropped);
     // 捨てられて空になった差分は送らない。知らせるのは warnDropped が済ませている
     if (isEmpty(normalized.record)) {
+        return null;
+    }
+    // WHY: 実行基盤も同じ数で打ち切る。ここで送っても記録されない
+    if (
+        !existing &&
+        addedKeys(known, normalized.record).length > 0 &&
+        _sentCount >= readLimit(external.limits, "subjectsPerPlay")
+    ) {
+        warnDropped([{ key: subject, reason: "TooManySubjects" }]);
         return null;
     }
     return {
