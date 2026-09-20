@@ -1,0 +1,46 @@
+{
+  "name": "@multi-indiegame/akashic-scoreboard-plugin",
+  "version": "0.1.0",
+  "description": "プレイ記録を受け取るための Akashic Engine 拡張（コンテンツ実行基盤側のプラグイン）",
+  "main": "lib/index.js",
+  "typings": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "package.json",
+    "CHANGELOG.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "clean": "rimraf ./lib",
+    "build": "npm run clean && tsc -p ./",
+    "prepublishOnly": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/multi-indiegame/akashic-scoreboard.git",
+    "directory": "packages/akashic-scoreboard-plugin"
+  },
+  "keywords": [
+    "akashic",
+    "akashic-extension"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@multi-indiegame/akashic-scoreboard": "^0.1.0"
+  },
+  "devDependencies": {
+    "rimraf": "^6.0.1",
+    "typescript": "^5.7.2"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

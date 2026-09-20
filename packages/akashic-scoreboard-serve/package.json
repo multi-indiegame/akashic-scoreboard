@@ -1,0 +1,53 @@
+{
+  "name": "@multi-indiegame/akashic-scoreboard-serve",
+  "version": "0.1.0",
+  "description": "@multi-indiegame/akashic-scoreboard を akashic serve の上で動作確認するためのバックエンド",
+  "main": "lib/index.js",
+  "typings": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./plugin.js": "./plugin.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "plugin.js",
+    "package.json",
+    "CHANGELOG.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "clean": "rimraf ./lib ./plugin.js",
+    "build": "npm run clean && tsc -p ./ && tsc -p ./tsconfig.plugin.json && node ./scripts/build-plugin.js",
+    "prepublishOnly": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/multi-indiegame/akashic-scoreboard.git",
+    "directory": "packages/akashic-scoreboard-serve"
+  },
+  "keywords": [
+    "akashic",
+    "akashic-serve",
+    "akashic-extension"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@multi-indiegame/akashic-scoreboard-plugin": "^0.1.0"
+  },
+  "devDependencies": {
+    "@akashic/akashic-cli-serve": "^2.0.21",
+    "@multi-indiegame/akashic-serve-extension-dock": "^1.0.0",
+    "@types/node": "^24.12.2",
+    "esbuild": "^0.25.0",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.7.2"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
