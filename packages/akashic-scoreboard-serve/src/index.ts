@@ -37,6 +37,15 @@ interface StoredRecords {
 }
 
 /**
+ * WHY: playerId はコンテンツが決めた文字列なので、`toString` や `__proto__`
+ * のような名前も来る。素のオブジェクトだと継承したプロパティに当たってしまい、
+ * 記録がそちらへ書かれて画面にも出てこない。
+ */
+function emptyRecords(): StoredRecords {
+    return { play: {}, players: Object.create(null) };
+}
+
+/**
  * 本番の実行基盤の代役として、記録をその場でまとめて保持する。
  *
  * WHY: 差分のまま出しても読めないので、実行基盤がやるのと同じマージ（後勝ち・
@@ -44,7 +53,7 @@ interface StoredRecords {
  * だから。
  */
 class ServeBackend implements ScoreboardBackend {
-    _records: StoredRecords = { play: {}, players: {} };
+    _records: StoredRecords = emptyRecords();
     _outputPath: string | null;
     _origin: ServeOrigin;
 

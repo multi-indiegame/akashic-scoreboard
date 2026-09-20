@@ -84,10 +84,25 @@ export class ScoreboardPlugin {
     untrustedSignature: ObjectSignature = UNTRUSTED_SIGNATURE;
     _backend: ScoreboardBackend;
     _limits?: ScoreboardLimits;
+    /**
+     * 相手ごとに、これまで受け取ったキー。
+     *
+     * WHY: キー数の上限は積み上がった記録全体に掛かる。1 回の報告ごとに数え
+     * 直すと、別々の名前で送り続けるだけで上限を越えられてしまう。まとめた
+     * 記録を持つのはバックエンドだが、上限の判定はここで完結させたいので、
+     * 判定に要るキー名だけを控える。
+     *
+     * WHY: このプラグインは 1 プレイにつき 1 つ作られるので、控えた内容は
+     * そのプレイが終われば捨てられる。
+     */
+    _knownKeys: { [subject: string]: { [key: string]: true } };
 
     constructor(param: ScoreboardPluginParameterObject) {
         this._backend = param.backend;
         this._limits = param.limits;
+        this._knownKeys = Object.create(null) as {
+            [subject: string]: { [key: string]: true };
+        };
     }
 
     /**
@@ -115,9 +130,10 @@ export class ScoreboardPlugin {
     }
 
     _record(subject: ScoreRecordSubject, patch: ScoreRecordPatch): void {
+        const known = this._knownKeysOf(subject);
         // WHY: コンテンツから来た値はライブラリを経由したとは限らない（同一
         // オリジンなら external を直接叩ける）。受け取る側でもう一度検証する
-        const normalized = normalizeRecordPatch(patch, this._limits);
+        const normalized = normalizeRecordPatch(patch, this._limits, known);
         const rejected: RejectedRecordEntry[] = normalized.dropped.map(
             (entry) => ({ key: entry.key, reason: entry.reason }),
         );
@@ -126,6 +142,30 @@ export class ScoreboardPlugin {
         } catch (_err) {
             // WHY: 実行基盤の都合でコンテンツの進行を止めない。記録が残らない
             // ことの影響は、そのプレイに閉じる
+            return;
         }
+        // WHY: 控えるのはバックエンドが受け取ったあと。例外で届かなかった
+        // ぶんを数に入れると、記録されていないキーで上限が埋まる
+        for (const key of Object.keys(normalized.record)) {
+            if (normalized.record[key] === null) {
+                delete known[key];
+            } else {
+                known[key] = true;
+            }
+        }
+    }
+
+    _knownKeysOf(subject: ScoreRecordSubject): { [key: string]: true } {
+        // WHY: playerId はコンテンツが決めた文字列で、`__proto__` のような
+        // 名前も来うる。素のオブジェクトだと継承したプロパティに当たる
+        const id =
+            subject.kind === "play" ? "play" : `player:${subject.playerId}`;
+        const known = this._knownKeys[id];
+        if (known) {
+            return known;
+        }
+        return (this._knownKeys[id] = Object.create(null) as {
+            [key: string]: true;
+        });
     }
 }

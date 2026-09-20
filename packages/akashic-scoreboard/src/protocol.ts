@@ -29,7 +29,10 @@ export interface ScoreRecordPatch {
  * ときはそちらに従う。緩める方向にも厳しくする方向にも指定できる。
  */
 export interface ScoreboardLimits {
-    /** 1プレイヤーあたりのキー数 */
+    /**
+     * 1プレイヤーあたりのキー数。1回の報告ではなく、**そのプレイで積み上がった
+     * 記録全体**に掛かる。
+     */
     keysPerPlayer?: number;
     /** string の長さ（コードポイント数） */
     stringLength?: number;
@@ -64,6 +67,15 @@ export const DEFAULT_LIMITS: Required<
  */
 export const RECORD_KEY_PATTERN = /^[a-zA-Z0-9_:-]{1,32}$/;
 
+/**
+ * 形式には合うが使えないキー名。
+ *
+ * WHY: `__proto__` への代入は、素のオブジェクトではプロパティを作らずに
+ * プロトタイプを差し替えようとする。受理したのに記録には載らない、という
+ * 食い違いが生まれるうえ、記録を組み立てる側の足もとを崩す。
+ */
+const RESERVED_RECORD_KEYS = ["__proto__"];
+
 /** 値が破棄された理由 */
 export type DropReason =
     /** キー名が形式に合わない */
@@ -86,6 +98,9 @@ export interface NormalizeResult {
 }
 
 export function isValidRecordKey(key: string): boolean {
+    if (RESERVED_RECORD_KEYS.indexOf(key) >= 0) {
+        return false;
+    }
     return RECORD_KEY_PATTERN.test(key);
 }
 
@@ -97,12 +112,17 @@ export function isValidRecordKey(key: string): boolean {
  *
  * 既定外のため破棄した値は握り潰さず `dropped` に積んで返す。投稿者の動作確認に支障が出るので警告を出す。
  *
+ * `knownKeys` には、その相手について既に記録されているキーを渡す。キー数の
+ * 上限は積み上がった記録全体に掛かるので、これを渡さないと 1 回の報告ぶんしか
+ * 数えられない。既にあるキーの上書きは新しいキーとして数えない。
+ *
  * WHY: 長すぎる string を切り詰めないのは、切り詰めた結果が別の値として
  * 集計されてしまうため。破棄するほうが読み手を誤らせない。
  */
 export function normalizeRecordPatch(
     patch: unknown,
     limits?: ScoreboardLimits,
+    knownKeys?: { [key: string]: true } | null,
 ): NormalizeResult {
     const record: ScoreRecordPatch = {};
     const dropped: DroppedEntry[] = [];
@@ -118,7 +138,8 @@ export function normalizeRecordPatch(
             ? limits.stringLength
             : DEFAULT_LIMITS.stringLength;
     const source = patch as { [key: string]: unknown };
-    let count = 0;
+    const known = knownKeys ?? {};
+    let count = Object.keys(known).length;
     for (const key in source) {
         if (!Object.prototype.hasOwnProperty.call(source, key)) {
             continue;
@@ -127,15 +148,19 @@ export function normalizeRecordPatch(
             dropped.push({ key: key, reason: "InvalidKey" });
             continue;
         }
-        if (count >= maxKeys) {
-            dropped.push({ key: key, reason: "TooManyKeys" });
-            continue;
-        }
         const value = source[key];
-        // null はキーの削除を表すので、値の検証を通さずそのまま渡す
+        // null はキーの削除を表すので、値の検証を通さずそのまま渡す。
+        // 消す側が上限で弾かれると、上限に達した記録から抜け出せなくなる
         if (value === null) {
             record[key] = null;
-            count++;
+            if (known[key] === true) {
+                count--;
+            }
+            continue;
+        }
+        // 既にあるキーへの上書きは記録を増やさないので、上限には数えない
+        if (known[key] !== true && count >= maxKeys) {
+            dropped.push({ key: key, reason: "TooManyKeys" });
             continue;
         }
         const type = typeof value;
@@ -154,7 +179,9 @@ export function normalizeRecordPatch(
             continue;
         }
         record[key] = value as ScoreValue;
-        count++;
+        if (known[key] !== true) {
+            count++;
+        }
     }
     return { record: record, dropped: dropped };
 }
