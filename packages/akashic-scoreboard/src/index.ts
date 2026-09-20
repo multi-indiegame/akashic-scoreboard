@@ -68,6 +68,42 @@ function canDetectActiveInstance(): boolean {
 const _warnedKeys: string[] = [];
 
 /**
+ * 相手ごとに、これまで報告したキー。
+ *
+ * WHY: キー数の上限は積み上がった記録全体に掛かる。控えずに 1 回の報告ごとに
+ * 数えると、既にあるキーへの上書きが「新しいキー」に見えて捨てられる。
+ *
+ * WHY: 素のオブジェクトにしないのは、playerId に `__proto__` のような名前が
+ * 来たときに継承したプロパティへ当たるのを避けるため。
+ */
+const _sentKeys: { [subject: string]: { [key: string]: true } } =
+    Object.create(null);
+
+function sentKeysOf(subject: string): { [key: string]: true } {
+    const known = _sentKeys[subject];
+    if (known) {
+        return known;
+    }
+    return (_sentKeys[subject] = Object.create(null) as {
+        [key: string]: true;
+    });
+}
+
+function remember(
+    known: { [key: string]: true },
+    record: ScoreRecordPatch,
+): void {
+    const keys = Object.keys(record);
+    for (let i = 0; i < keys.length; i++) {
+        if (record[keys[i]] === null) {
+            delete known[keys[i]];
+        } else {
+            known[keys[i]] = true;
+        }
+    }
+}
+
+/**
  * WHY: ライブラリが既定外の値を告知なしに破棄すると、投稿者の動作確認に支障が出るので警告する。
  * 同じキーで繰り返し警告しても新しい情報は無いので、キーごとに一度だけにする。
  */
@@ -134,11 +170,14 @@ export function setPlayerRecord(
     if (typeof playerId !== "string" || playerId === "") {
         return;
     }
-    const external = report(patch);
-    if (!external) {
+    const reported = report(patch, "player:" + playerId);
+    if (!reported) {
         return;
     }
-    external.external.setPlayerRecord(playerId, external.record);
+    reported.external.setPlayerRecord(playerId, reported.record);
+    // WHY: 控えるのは報告したあと。実行基盤が例外を出した分を数に入れると、
+    // 記録されていないキーで上限が埋まる
+    remember(reported.known, reported.record);
 }
 
 /**
@@ -147,11 +186,12 @@ export function setPlayerRecord(
  * 扱いは {@link setPlayerRecord} と同じ。
  */
 export function setPlayRecord(patch: ScoreRecordPatch): void {
-    const external = report(patch);
-    if (!external) {
+    const reported = report(patch, "play");
+    if (!reported) {
         return;
     }
-    external.external.setPlayRecord(external.record);
+    reported.external.setPlayRecord(reported.record);
+    remember(reported.known, reported.record);
 }
 
 let _warnedAboutDetection = false;
@@ -176,7 +216,12 @@ function warnIfCannotDetect(): void {
 
 function report(
     patch: ScoreRecordPatch,
-): { external: ScoreboardExternal; record: ScoreRecordPatch } | null {
+    subject: string,
+): {
+    external: ScoreboardExternal;
+    record: ScoreRecordPatch;
+    known: { [key: string]: true };
+} | null {
     const external = findExternal();
     if (!external) {
         return null;
@@ -190,13 +235,14 @@ function report(
     if (!isActiveInstance()) {
         return null;
     }
-    const normalized = normalizeRecordPatch(patch, external.limits);
+    const known = sentKeysOf(subject);
+    const normalized = normalizeRecordPatch(patch, external.limits, known);
     warnDropped(normalized.dropped);
     // 捨てられて空になった差分は送らない。知らせるのは warnDropped が済ませている
     if (isEmpty(normalized.record)) {
         return null;
     }
-    return { external: external, record: normalized.record };
+    return { external: external, record: normalized.record, known: known };
 }
 
 function isEmpty(record: ScoreRecordPatch): boolean {

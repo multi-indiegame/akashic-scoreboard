@@ -140,6 +140,16 @@ export function normalizeRecordPatch(
     const source = patch as { [key: string]: unknown };
     const known = knownKeys ?? {};
     let count = Object.keys(known).length;
+    // WHY: 同じ差分の中で消えるキーは、先に空きとして数える。後回しにすると、
+    // 同じ内容の差分でもキーの並び順で結果が変わる
+    for (const key in source) {
+        if (!Object.prototype.hasOwnProperty.call(source, key)) {
+            continue;
+        }
+        if (source[key] === null && known[key] === true) {
+            count--;
+        }
+    }
     for (const key in source) {
         if (!Object.prototype.hasOwnProperty.call(source, key)) {
             continue;
@@ -153,9 +163,6 @@ export function normalizeRecordPatch(
         // 消す側が上限で弾かれると、上限に達した記録から抜け出せなくなる
         if (value === null) {
             record[key] = null;
-            if (known[key] === true) {
-                count--;
-            }
             continue;
         }
         // 既にあるキーへの上書きは記録を増やさないので、上限には数えない

@@ -58,6 +58,8 @@ const runner = runnerManager.createRunner({
 
 **キー数の上限は、1 回の報告ではなく、相手ごとに積み上がった記録全体に掛かります。** プラグインが受け取ったキー名を控えて判定するので、実装側で数える必要はありません。プラグインは 1 プレイにつき 1 つ作ってください。
 
+渡した `limits` は複製して保持します。コンテンツから見える `g.game.external.scoreboard.limits` はさらに別の複製なので、そこを書き換えられても判定は変わりません。
+
 ### `plugin.createExternal()`
 
 `g.game.external.scoreboard` に入れるオブジェクトを返します。

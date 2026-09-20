@@ -99,7 +99,9 @@ export class ScoreboardPlugin {
 
     constructor(param: ScoreboardPluginParameterObject) {
         this._backend = param.backend;
-        this._limits = param.limits;
+        // WHY: 渡された実体をそのまま持つと、createExternal() で露出した先から
+        // 書き換えられて上限が効かなくなる。複製して手元に閉じる
+        this._limits = param.limits ? copyLimits(param.limits) : undefined;
         this._knownKeys = Object.create(null) as {
             [subject: string]: { [key: string]: true };
         };
@@ -124,7 +126,9 @@ export class ScoreboardPlugin {
             },
         };
         if (this._limits) {
-            external.limits = this._limits;
+            // WHY: コンテンツから見えるのは判定に使う実体とは別の複製。
+            // 書き換えられても判定は変わらない
+            external.limits = copyLimits(this._limits);
         }
         return external;
     }
@@ -168,4 +172,17 @@ export class ScoreboardPlugin {
             [key: string]: true;
         });
     }
+}
+
+/**
+ * WHY: フィールドを並べずに写すのは、新しい版の拡張ライブラリが増やした上限を
+ * 落とさないため。このプラグインが知らない項目もコンテンツ側へ渡す。
+ */
+function copyLimits(limits: ScoreboardLimits): ScoreboardLimits {
+    const source = limits as { [key: string]: unknown };
+    const copy: { [key: string]: unknown } = {};
+    for (const key of Object.keys(source)) {
+        copy[key] = source[key];
+    }
+    return copy as ScoreboardLimits;
 }
