@@ -1,4 +1,5 @@
 import {
+    DroppedEntry,
     EXTERNAL_KEY,
     ObjectSignature,
     ScoreRecordPatch,
@@ -6,10 +7,12 @@ import {
     ScoreboardLimits,
     UNTRUSTED_SIGNATURE,
     normalizeRecordPatch,
+    readLimit,
 } from "@multi-indiegame/akashic-scoreboard/protocol";
 
 export {
     DEFAULT_LIMITS,
+    readLimit,
     DropReason,
     DroppedEntry,
     EXTERNAL_KEY,
@@ -85,12 +88,16 @@ export class ScoreboardPlugin {
     _backend: ScoreboardBackend;
     _limits?: ScoreboardLimits;
     /**
-     * 相手ごとに、これまで受け取ったキー。
+     * 相手ごとに、これまで報告を受けたキー。
      *
      * WHY: キー数の上限は積み上がった記録全体に掛かる。1 回の報告ごとに数え
      * 直すと、別々の名前で送り続けるだけで上限を越えられてしまう。まとめた
      * 記録を持つのはバックエンドだが、上限の判定はここで完結させたいので、
      * 判定に要るキー名だけを控える。
+     *
+     * WHY: 数えるのは**報告したキー**で、バックエンドが実際に保存できたか
+     * では数えない。保存の成否を返す口が無い以上、それを待つとコンテンツ側の
+     * 控えとずれる。
      *
      * WHY: このプラグインは 1 プレイにつき 1 つ作られるので、控えた内容は
      * そのプレイが終われば捨てられる。
@@ -119,6 +126,14 @@ export class ScoreboardPlugin {
                 if (typeof playerId !== "string" || playerId === "") {
                     return;
                 }
+                // WHY: 長すぎる playerId は相手として扱わない。控えにも記録にも
+                // 載せないので、ここで打ち切る。コンテンツ側のライブラリが
+                // 警告を出す
+                if (
+                    playerId.length > readLimit(this._limits, "playerIdLength")
+                ) {
+                    return;
+                }
                 this._record({ kind: "player", playerId: playerId }, patch);
             },
             setPlayRecord: (patch) => {
@@ -134,44 +149,77 @@ export class ScoreboardPlugin {
     }
 
     _record(subject: ScoreRecordSubject, patch: ScoreRecordPatch): void {
-        const known = this._knownKeysOf(subject);
+        const id = subjectId(subject);
+        const existing = this._knownKeys[id];
+        if (!existing && this._isFull()) {
+            this._reportTooManySubjects(subject, patch);
+            return;
+        }
+        const known =
+            existing ?? (Object.create(null) as { [key: string]: true });
         // WHY: コンテンツから来た値はライブラリを経由したとは限らない（同一
         // オリジンなら external を直接叩ける）。受け取る側でもう一度検証する
         const normalized = normalizeRecordPatch(patch, this._limits, known);
         const rejected: RejectedRecordEntry[] = normalized.dropped.map(
             (entry) => ({ key: entry.key, reason: entry.reason }),
         );
-        try {
-            this._backend.record(subject, normalized.record, rejected);
-        } catch (_err) {
-            // WHY: 実行基盤の都合でコンテンツの進行を止めない。記録が残らない
-            // ことの影響は、そのプレイに閉じる
-            return;
+        const keys = Object.keys(normalized.record);
+        // WHY: 何も記録しない報告で相手を控え始めない。実在しない playerId を
+        // 並べるだけで控えが増えるのを防ぐ
+        if (keys.length > 0) {
+            this._knownKeys[id] = known;
         }
-        // WHY: 控えるのはバックエンドが受け取ったあと。例外で届かなかった
-        // ぶんを数に入れると、記録されていないキーで上限が埋まる
-        for (const key of Object.keys(normalized.record)) {
+        // WHY: 控えるのは報告する前。バックエンドが例外を出した分を控えないと、
+        // コンテンツ側の控えとずれて、正当な記録が捨てられる
+        for (const key of keys) {
             if (normalized.record[key] === null) {
                 delete known[key];
             } else {
                 known[key] = true;
             }
         }
+        try {
+            this._backend.record(subject, normalized.record, rejected);
+        } catch (_err) {
+            // WHY: 実行基盤の都合でコンテンツの進行を止めない。記録が残らない
+            // ことの影響は、そのプレイに閉じる
+        }
     }
 
-    _knownKeysOf(subject: ScoreRecordSubject): { [key: string]: true } {
-        // WHY: playerId はコンテンツが決めた文字列で、`__proto__` のような
-        // 名前も来うる。素のオブジェクトだと継承したプロパティに当たる
-        const id =
-            subject.kind === "play" ? "play" : `player:${subject.playerId}`;
-        const known = this._knownKeys[id];
-        if (known) {
-            return known;
-        }
-        return (this._knownKeys[id] = Object.create(null) as {
-            [key: string]: true;
-        });
+    _isFull(): boolean {
+        return (
+            Object.keys(this._knownKeys).length >=
+            readLimit(this._limits, "subjectsPerPlay")
+        );
     }
+
+    /**
+     * WHY: 黙って捨てると、実行基盤には何も残らない。上限に達したことが
+     * 分かるよう、破棄した理由として報告する。
+     */
+    _reportTooManySubjects(
+        subject: ScoreRecordSubject,
+        patch: ScoreRecordPatch,
+    ): void {
+        const normalized = normalizeRecordPatch(patch, this._limits);
+        const rejected: RejectedRecordEntry[] = [];
+        const dropped: DroppedEntry[] = normalized.dropped;
+        for (const key of Object.keys(normalized.record)) {
+            rejected.push({ key: key, reason: "TooManySubjects" });
+        }
+        for (const entry of dropped) {
+            rejected.push({ key: entry.key, reason: entry.reason });
+        }
+        try {
+            this._backend.record(subject, {}, rejected);
+        } catch (_err) {
+            // 上に同じ
+        }
+    }
+}
+
+function subjectId(subject: ScoreRecordSubject): string {
+    return subject.kind === "play" ? "play" : `player:${subject.playerId}`;
 }
 
 /**

@@ -17,7 +17,7 @@ import {
     create,
     getDock,
 } from "@multi-indiegame/akashic-serve-extension-dock";
-import { decodeSnapshot, RecordSnapshot } from "./channel";
+import { DecodedSnapshot, decodeSnapshot, RecordSnapshot } from "./channel";
 
 /** akashic serve がページに出しているもののうち、使う部分だけ */
 interface TickArguments {
@@ -35,6 +35,7 @@ interface GameContentLike {
 interface ServeGlobals {
     store?: {
         currentLocalInstance?: { gameContent?: GameContentLike } | null;
+        currentPlay?: { playId?: number } | null;
     } | null;
 }
 
@@ -46,7 +47,31 @@ const serve = (): ServeGlobals | null => {
     return host.akashicServe ?? host.__testbed ?? null;
 };
 
-let snapshot: RecordSnapshot = { play: {}, players: {} };
+/**
+ * 受け取った最新のスナップショット。
+ *
+ * WHY: このファイルはインスタンスが作られるたびに評価し直される。一方で画面を
+ * 出すのは最初に登録したコピーだけ（ドックは同じ id なら先に登録したものを使う）
+ * なので、状態を window に置いて全部のコピーで共有する。そうしないと、後から
+ * 作られたコピーだけが新しい記録を受け取り、画面には出てこない。
+ */
+interface SharedState {
+    latest: DecodedSnapshot | null;
+    render: (() => void) | null;
+    attached: WeakSet<GameContentLike>;
+}
+
+const shared: SharedState = ((): SharedState => {
+    const host = window as unknown as {
+        __akashicScoreboardServe?: SharedState;
+    };
+    return (host.__akashicScoreboardServe ??= {
+        latest: null,
+        render: null,
+        attached: new WeakSet<GameContentLike>(),
+    });
+})();
+
 let body: HTMLElement | null = null;
 let overlay: HTMLElement | null = null;
 
@@ -57,6 +82,7 @@ const handle = getDock().register({
     // WHY: ドックのパネルは狭く、記録は縦に伸びる。タブを開いたら画面全体を覆う
     // 表示に切り替え、パネル自体には案内だけを残す
     build: () => {
+        shared.render = render;
         openOverlay();
         return create(
             "div",
@@ -138,13 +164,27 @@ function closeOverlay(): void {
     }
     overlay = null;
     body = null;
+    // WHY: 開き直したときは中身が無いので、同じ内容でも描き直す
+    renderedSeq = null;
 }
+
+let renderedSeq: number | null = null;
 
 function render(): void {
     if (!body) {
         return;
     }
+    const latest = shared.latest;
+    // WHY: 同じ内容で描き直すと、スクロール位置と選択が飛ぶ
+    if (latest && latest.seq === renderedSeq) {
+        return;
+    }
+    renderedSeq = latest ? latest.seq : null;
+    const snapshot: RecordSnapshot = latest
+        ? latest.records
+        : { play: {}, players: {} };
     body.textContent = "";
+    body.appendChild(status(latest));
     body.appendChild(section("部屋の記録", snapshot.play));
     const ids = Object.keys(snapshot.players);
     if (ids.length === 0) {
@@ -154,6 +194,38 @@ function render(): void {
     for (const id of ids) {
         body.appendChild(section(`プレイヤー ${id}`, snapshot.players[id]));
     }
+}
+
+/**
+ * WHY: 画面が「いつの・どのプレイの」記録かを出す。送信が止まったときや、
+ * 切り詰めて送ったときに、古い値を現在値として読まれないようにする。
+ */
+function status(latest: DecodedSnapshot | null): HTMLElement {
+    const wrapper = create("div", {
+        fontSize: "12px",
+        opacity: "0.7",
+        marginTop: "12px",
+    });
+    if (!latest) {
+        wrapper.textContent = "まだ記録を受け取っていません。";
+        return wrapper;
+    }
+    const time = new Date(latest.at).toLocaleTimeString();
+    const play = latest.playId == null ? "不明" : String(latest.playId);
+    wrapper.textContent = `最終更新 ${time} ／ プレイ ${play}`;
+    if (latest.truncated) {
+        wrapper.appendChild(
+            create(
+                "div",
+                { color: "#a4471c" },
+                {
+                    textContent:
+                        "記録が大きいため、一部のプレイヤーは表示していません。",
+                },
+            ),
+        );
+    }
+    return wrapper;
 }
 
 function section(
@@ -223,19 +295,36 @@ function section(
     return wrapper;
 }
 
+function accept(decoded: DecodedSnapshot): void {
+    // WHY: 到着が入れ替わっても、古い内容で新しい内容を上書きしない
+    const latest = shared.latest;
+    if (
+        latest &&
+        latest.playId === decoded.playId &&
+        latest.seq > decoded.seq
+    ) {
+        return;
+    }
+    shared.latest = decoded;
+    if (shared.render) {
+        shared.render();
+    }
+}
+
 /**
  * WHY: ティックは instance ごとに流れる。インスタンスは作り直されるので、
  * 取りこぼさないよう新しい gameContent を見つけたら繋ぎ直す。同じものへ二重に
- * 繋がないよう、繋いだ相手を覚えておく。
+ * 繋がないよう、繋いだ相手を覚えておく（覚え先は全コピーで共有する）。
  */
-const attached = new WeakSet<GameContentLike>();
-
-function attach(): void {
+function attach(): boolean {
     const content = serve()?.store?.currentLocalInstance?.gameContent;
-    if (!content || !content.onTick || attached.has(content)) {
-        return;
+    if (!content || !content.onTick) {
+        return false;
     }
-    attached.add(content);
+    if (shared.attached.has(content)) {
+        return true;
+    }
+    shared.attached.add(content);
     content.onTick.add((arg) => {
         if (!arg || !arg.events) {
             return;
@@ -243,15 +332,68 @@ function attach(): void {
         for (const event of arg.events) {
             const decoded = decodeSnapshot(event);
             if (decoded) {
-                snapshot = decoded;
-                render();
+                accept(decoded);
             }
         }
     });
+    // WHY: onTick は繋いだ後のティックしか見えない。繋ぐ前に流れた分を
+    // playlog から拾い直さないと、次の記録が来るまで画面が古いままになる
+    recover();
+    return true;
 }
 
-attach();
-setInterval(attach, 1000);
+/** いまのプレイの playlog から、最後のスナップショットを拾い直す */
+function recover(): void {
+    const playId = serve()?.store?.currentPlay?.playId;
+    if (playId == null || typeof fetch !== "function") {
+        return;
+    }
+    fetch(`/api/plays/${playId}/playlog`)
+        .then((res) => (res.ok ? res.json() : null))
+        .then((body: { data?: { tickList?: unknown } } | null) => {
+            for (const event of collectEvents(body?.data)) {
+                const decoded = decodeSnapshot(event);
+                if (decoded) {
+                    accept(decoded);
+                }
+            }
+        })
+        .catch(() => {
+            // WHY: 拾い直せなくても、次の記録が来れば追いつく
+        });
+}
+
+/**
+ * WHY: playlog の形は cli-serve の内部の取り決めで、版によって変わりうる。
+ * 深さを決め打ちせず、イベントらしい配列を拾って decodeSnapshot に判定させる。
+ */
+function collectEvents(value: unknown, depth = 0): unknown[] {
+    if (!Array.isArray(value) || depth > 4) {
+        return [];
+    }
+    if (typeof value[0] === "number" && value.length >= 4) {
+        return [value];
+    }
+    const found: unknown[] = [];
+    for (const child of value) {
+        for (const event of collectEvents(child, depth + 1)) {
+            found.push(event);
+        }
+    }
+    return found;
+}
+
+// WHY: 画面を持っているのは最初に登録したコピーだけ。後から評価された
+// コピーで上書きすると、描き直しが誰にも届かなくなる
+shared.render ??= render;
+if (!attach()) {
+    // WHY: gameContent がまだ無いときだけ待つ。繋がったらタイマーを止める
+    const timer = setInterval(() => {
+        if (attach()) {
+            clearInterval(timer);
+        }
+    }, 200);
+}
 
 // WHY: akashic serve は module.exports を 2 段で呼び、戻り値を
 // g.game.external.<名前> に入れる。このプラグインの仕事は画面を出すことなので、

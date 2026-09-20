@@ -14,7 +14,8 @@
  */
 import * as fs from "fs";
 import * as path from "path";
-import { sendSnapshot, ServeOrigin } from "./playlog";
+import { RecordSnapshot } from "./channel";
+import { ServeOrigin, SnapshotSender } from "./playlog";
 import { resolveServeOrigin } from "./serve-origin";
 import {
     ScoreRecordPatch,
@@ -31,18 +32,13 @@ const OUTPUT_PATH_ENV = "AKASHIC_SCOREBOARD_SERVE_OUTPUT";
 /** akashic serve の待ち受け先。既定は cli-serve の設定から拾う */
 const ORIGIN_ENV = "AKASHIC_SCOREBOARD_SERVE_ORIGIN";
 
-interface StoredRecords {
-    play: ScoreRecordPatch;
-    players: { [playerId: string]: ScoreRecordPatch };
-}
-
 /**
- * WHY: playerId はコンテンツが決めた文字列なので、`toString` や `__proto__`
- * のような名前も来る。素のオブジェクトだと継承したプロパティに当たってしまい、
- * 記録がそちらへ書かれて画面にも出てこない。
+ * WHY: キー名も playerId もコンテンツが決めた文字列なので、`toString` や
+ * `__proto__` のような名前も来る。素のオブジェクトだと継承したプロパティに
+ * 当たってしまい、記録がそちらへ書かれて画面にも出てこない。
  */
-function emptyRecords(): StoredRecords {
-    return { play: {}, players: Object.create(null) };
+function emptyRecords(): RecordSnapshot {
+    return { play: Object.create(null), players: Object.create(null) };
 }
 
 /**
@@ -53,13 +49,14 @@ function emptyRecords(): StoredRecords {
  * だから。
  */
 class ServeBackend implements ScoreboardBackend {
-    _records: StoredRecords = emptyRecords();
+    _records: RecordSnapshot = emptyRecords();
     _outputPath: string | null;
-    _origin: ServeOrigin;
+    _sender: SnapshotSender;
+    _warnedWriteFailure = false;
 
     constructor(outputPath: string | null, origin: ServeOrigin) {
         this._outputPath = outputPath;
-        this._origin = origin;
+        this._sender = new SnapshotSender(origin);
     }
 
     record(
@@ -70,10 +67,15 @@ class ServeBackend implements ScoreboardBackend {
         const target =
             subject.kind === "play"
                 ? this._records.play
-                : (this._records.players[subject.playerId] ??= {});
+                : (this._records.players[subject.playerId] ??=
+                      Object.create(null));
         merge(target, patch);
+        // WHY: playerId はコンテンツが決めた任意の文字列。素のまま出すと、
+        // 改行を混ぜてログの行を偽装できる
         const label =
-            subject.kind === "play" ? "play" : `player ${subject.playerId}`;
+            subject.kind === "play"
+                ? "play"
+                : `player ${JSON.stringify(subject.playerId)}`;
         console.log(
             `[akashic-scoreboard-serve] ${label}: ${JSON.stringify(patch)}`,
         );
@@ -84,11 +86,7 @@ class ServeBackend implements ScoreboardBackend {
             );
         }
         this._write();
-        sendSnapshot(this._origin, this._records);
-    }
-
-    snapshot(): StoredRecords {
-        return this._records;
+        this._sender.send(this._records);
     }
 
     _write(): void {
@@ -96,21 +94,33 @@ class ServeBackend implements ScoreboardBackend {
         if (!this._outputPath) {
             return;
         }
+        const temp = `${this._outputPath}.tmp`;
         try {
+            // WHY: 親ディレクトリが無いだけで毎回失敗するのは、書き出し先を
+            // 指定した人の意図と合わない
+            fs.mkdirSync(path.dirname(this._outputPath), { recursive: true });
+            // WHY: 直接上書きすると、途中で落ちたときに壊れた JSON が残る
             fs.writeFileSync(
-                this._outputPath,
+                temp,
                 JSON.stringify(this._records, null, 4) + "\n",
             );
+            fs.renameSync(temp, this._outputPath);
         } catch (err) {
-            console.warn(
-                "[akashic-scoreboard-serve] 記録の書き出しに失敗しました",
-                err,
-            );
+            // WHY: 記録のたびにスタックトレースを出すと、動作確認の妨げになる
+            if (!this._warnedWriteFailure) {
+                this._warnedWriteFailure = true;
+                console.warn(
+                    `[akashic-scoreboard-serve] 記録の書き出しに失敗しました: ${(err as Error).message}`,
+                );
+            }
         }
     }
 }
 
-function merge(target: ScoreRecordPatch, patch: ScoreRecordPatch): void {
+function merge(
+    target: { [key: string]: number | string | boolean },
+    patch: ScoreRecordPatch,
+): void {
     for (const key of Object.keys(patch)) {
         const value = patch[key];
         if (value === null) {
@@ -153,6 +163,11 @@ function createScoreboardExternal(options: ScoreboardServeOptions = {}) {
     console.log(
         "[akashic-scoreboard-serve] 記録を受け取ります。" +
             "akashic serve の画面の「スコアボード」タブで確認できます。",
+    );
+    // WHY: 推定した送信先が外れていると、記録が別のサービスへ飛ぶ。どこへ送るかを
+    // 必ず見せる
+    console.log(
+        `[akashic-scoreboard-serve] 記録の送信先: ${origin.protocol}://${origin.hostname}:${origin.port}`,
     );
     if (outputPath) {
         console.log(

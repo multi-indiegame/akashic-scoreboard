@@ -14,12 +14,34 @@ const DEFAULT_ORIGIN: ServeOrigin = {
 };
 
 export function resolveServeOrigin(specified?: string): ServeOrigin {
-    return (
+    const origin =
         parseOrigin(specified) ??
         parseOrigin(process.env["AKASHIC_SCOREBOARD_SERVE_ORIGIN"]) ??
-        fromServerGlobalConfig() ??
+        // WHY: argv を設定より先に見る。cli-serve の設定は同じプロセスの別コピー
+        // でも読めてしまい、実際に待ち受けている先とは限らない。指定された
+        // ポートのほうが、書いた人の意図に近い
         fromArgv() ??
-        DEFAULT_ORIGIN
+        fromServerGlobalConfig() ??
+        DEFAULT_ORIGIN;
+    warnIfRemote(origin);
+    return origin;
+}
+
+/**
+ * WHY: 記録には playerId が入る。これは手元で動かす動作確認の道具なので、
+ * 手元以外へ送る指定は、意図したものか確かめてほしい。
+ */
+function warnIfRemote(origin: ServeOrigin): void {
+    if (
+        origin.hostname === "localhost" ||
+        origin.hostname === "127.0.0.1" ||
+        origin.hostname === "::1" ||
+        origin.hostname === "[::1]"
+    ) {
+        return;
+    }
+    console.warn(
+        `[akashic-scoreboard-serve] 手元以外へ記録を送ります: ${origin.hostname}`,
     );
 }
 
@@ -27,21 +49,43 @@ function parseOrigin(value?: string): ServeOrigin | null {
     if (!value) {
         return null;
     }
+    const url = tryParseUrl(value);
+    // WHY: 黙って既定へ落とすと、指定したつもりの人が別の宛先へ送り続ける
+    if (!url) {
+        console.warn(
+            `[akashic-scoreboard-serve] 送信先の指定を読めませんでした: ${JSON.stringify(value)}。` +
+                "http://ホスト名:ポート の形で指定してください",
+        );
+        return null;
+    }
+    const protocol = url.protocol.replace(":", "");
+    return {
+        protocol: protocol,
+        hostname: url.hostname,
+        port: url.port
+            ? Number.parseInt(url.port, 10)
+            : protocol === "https"
+              ? 443
+              : 80,
+    };
+}
+
+function tryParseUrl(value: string): URL | null {
+    let url: URL;
     try {
-        const url = new URL(value);
-        const protocol = url.protocol.replace(":", "");
-        return {
-            protocol: protocol,
-            hostname: url.hostname,
-            port: url.port
-                ? Number.parseInt(url.port, 10)
-                : protocol === "https"
-                  ? 443
-                  : 80,
-        };
+        url = new URL(value);
     } catch (_err) {
         return null;
     }
+    // WHY: `localhost:3400` のようにスキームを書き忘れた指定は、URL としては
+    // 「localhost: スキーム」と読めてしまう。通すと別の宛先になる
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+        return null;
+    }
+    if (!url.hostname) {
+        return null;
+    }
+    return url;
 }
 
 /**

@@ -4,10 +4,12 @@ import {
     ScoreRecordPatch,
     ScoreboardExternal,
     normalizeRecordPatch,
+    readLimit,
 } from "./protocol";
 
 export {
     DEFAULT_LIMITS,
+    readLimit,
     DropReason,
     DroppedEntry,
     RECORD_KEY_PATTERN,
@@ -65,7 +67,18 @@ function canDetectActiveInstance(): boolean {
     return typeof game.isActiveInstance === "function";
 }
 
-const _warnedKeys: string[] = [];
+/**
+ * 一度警告した内容。
+ *
+ * WHY: 素のオブジェクトにしないのは、キー名に `__proto__` のような文字列が
+ * 来るため。配列にしないのは、警告のたびに全体を走査すると、破棄が大量に
+ * 出たときにゲームのループを止めてしまうため。
+ */
+const _warnedKeys: { [mark: string]: true } = Object.create(null);
+let _warnedCount = 0;
+
+/** 控える警告の数。これを超えると同じ内容でも繰り返し出る */
+const MAX_WARNED_MARKS = 256;
 
 /**
  * 相手ごとに、これまで報告したキー。
@@ -79,20 +92,32 @@ const _warnedKeys: string[] = [];
 const _sentKeys: { [subject: string]: { [key: string]: true } } =
     Object.create(null);
 
-function sentKeysOf(subject: string): { [key: string]: true } {
+let _sentCount = 0;
+
+function sentKeysOf(
+    subject: string,
+    limit: number,
+): { [key: string]: true } | null {
     const known = _sentKeys[subject];
     if (known) {
         return known;
     }
-    return (_sentKeys[subject] = Object.create(null) as {
-        [key: string]: true;
-    });
+    // WHY: 実行基盤も同じ数で打ち切る。ここで控えを増やしても記録されない
+    if (_sentCount >= limit) {
+        return null;
+    }
+    return Object.create(null) as { [key: string]: true };
 }
 
 function remember(
+    subject: string,
     known: { [key: string]: true },
     record: ScoreRecordPatch,
 ): void {
+    if (!_sentKeys[subject]) {
+        _sentKeys[subject] = known;
+        _sentCount++;
+    }
     const keys = Object.keys(record);
     for (let i = 0; i < keys.length; i++) {
         if (record[keys[i]] === null) {
@@ -117,10 +142,13 @@ function warnDropped(dropped: DroppedEntry[]): void {
     for (let i = 0; i < dropped.length; i++) {
         const entry = dropped[i];
         const mark = entry.key + ":" + entry.reason;
-        if (_warnedKeys.indexOf(mark) !== -1) {
+        if (_warnedKeys[mark] === true) {
             continue;
         }
-        _warnedKeys.push(mark);
+        if (_warnedCount < MAX_WARNED_MARKS) {
+            _warnedKeys[mark] = true;
+            _warnedCount++;
+        }
         console.warn(
             "[akashic-scoreboard] 既定外の値だったため、記録せずに破棄しました " +
                 "(key: " +
@@ -170,14 +198,17 @@ export function setPlayerRecord(
     if (typeof playerId !== "string" || playerId === "") {
         return;
     }
+    const external = findExternal();
+    if (playerId.length > readLimit(external?.limits, "playerIdLength")) {
+        warnLongPlayerId();
+        return;
+    }
     const reported = report(patch, "player:" + playerId);
     if (!reported) {
         return;
     }
     reported.external.setPlayerRecord(playerId, reported.record);
-    // WHY: 控えるのは報告したあと。実行基盤が例外を出した分を数に入れると、
-    // 記録されていないキーで上限が埋まる
-    remember(reported.known, reported.record);
+    remember(reported.subject, reported.known, reported.record);
 }
 
 /**
@@ -191,7 +222,26 @@ export function setPlayRecord(patch: ScoreRecordPatch): void {
         return;
     }
     reported.external.setPlayRecord(reported.record);
-    remember(reported.known, reported.record);
+    remember(reported.subject, reported.known, reported.record);
+}
+
+let _warnedAboutLongPlayerId = false;
+
+/**
+ * WHY: 長すぎる playerId は実行基盤が相手として扱わない。黙って落ちると、
+ * 投稿者は記録されない理由にたどり着けない。
+ */
+function warnLongPlayerId(): void {
+    if (_warnedAboutLongPlayerId) {
+        return;
+    }
+    _warnedAboutLongPlayerId = true;
+    if (typeof console !== "undefined" && console && console.warn) {
+        console.warn(
+            "[akashic-scoreboard] playerId が長すぎるため報告しませんでした。" +
+                "ev.player.id の値をそのまま渡してください。",
+        );
+    }
 }
 
 let _warnedAboutDetection = false;
@@ -220,6 +270,7 @@ function report(
 ): {
     external: ScoreboardExternal;
     record: ScoreRecordPatch;
+    subject: string;
     known: { [key: string]: true };
 } | null {
     const external = findExternal();
@@ -235,14 +286,26 @@ function report(
     if (!isActiveInstance()) {
         return null;
     }
-    const known = sentKeysOf(subject);
+    const known = sentKeysOf(
+        subject,
+        readLimit(external.limits, "subjectsPerPlay"),
+    );
+    if (!known) {
+        warnDropped([{ key: subject, reason: "TooManySubjects" }]);
+        return null;
+    }
     const normalized = normalizeRecordPatch(patch, external.limits, known);
     warnDropped(normalized.dropped);
     // 捨てられて空になった差分は送らない。知らせるのは warnDropped が済ませている
     if (isEmpty(normalized.record)) {
         return null;
     }
-    return { external: external, record: normalized.record, known: known };
+    return {
+        external: external,
+        record: normalized.record,
+        subject: subject,
+        known: known,
+    };
 }
 
 function isEmpty(record: ScoreRecordPatch): boolean {

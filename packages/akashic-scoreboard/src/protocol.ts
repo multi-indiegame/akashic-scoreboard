@@ -37,12 +37,19 @@ export interface ScoreboardLimits {
     /** string の長さ（コードポイント数） */
     stringLength?: number;
     /**
-     * 1回の報告に載るプレイヤー数。既定は無制限。
+     * playerId の長さ（UTF-16 の符号単位）。
      *
-     * WHY: 報告に載るのはアクティブインスタンスが把握している参加者なので、
-     * 参加者数を超えては増えない。記録が漏れる害のほうが大きいため既定では絞らない。
+     * WHY: playerId はコンテンツが決めた文字列で、実行基盤は受け取るまで中身を
+     * 知らない。長さを見ないと、巨大な文字列を相手ごとの控えに積まれてしまう。
      */
-    playersPerReport?: number;
+    playerIdLength?: number;
+    /**
+     * 1プレイで記録を持てる相手の数。プレイ自体の記録を 1 つとして数える。
+     *
+     * WHY: 相手が増えるぶんには参加者の実数で頭打ちになるはずだが、コンテンツが
+     * 申告する playerId は実在の参加者と結びついている保証がない。
+     */
+    subjectsPerPlay?: number;
 }
 
 /**
@@ -50,13 +57,33 @@ export interface ScoreboardLimits {
  *
  * WHY: キー名の形式と値の型は上書きさせない。系列（同じキーの記録の連なり）の
  * 同一性が崩れると、後から集計を組み直せなくなるため。
+ *
+ * WHY: 凍結するのは、書き換えられると上限を渡さない実行基盤の防御が丸ごと
+ * 外れるため。
  */
-export const DEFAULT_LIMITS: Required<
-    Pick<ScoreboardLimits, "keysPerPlayer" | "stringLength">
-> = {
+export const DEFAULT_LIMITS: Required<ScoreboardLimits> = Object.freeze({
     keysPerPlayer: 100,
     stringLength: 140,
-};
+    playerIdLength: 64,
+    subjectsPerPlay: 1000,
+});
+
+/**
+ * 実行基盤が渡してきた上限を読む。
+ *
+ * WHY: `NaN` や負の値をそのまま採ると、比較が常に偽になって上限が黙って
+ * 消える。壊れた指定は既定値へ落とす。
+ */
+export function readLimit(
+    limits: ScoreboardLimits | undefined,
+    name: keyof ScoreboardLimits,
+): number {
+    const value = limits ? limits[name] : undefined;
+    if (typeof value === "number" && isFinite(value) && value >= 0) {
+        return value;
+    }
+    return DEFAULT_LIMITS[name];
+}
 
 /**
  * キー名の形式。半角英数字と `_` `-` `:` を 1〜32 文字。
@@ -85,11 +112,52 @@ export type DropReason =
     /** string が長すぎる */
     | "TooLong"
     /** キー数の上限を超えた */
-    | "TooManyKeys";
+    | "TooManyKeys"
+    /** 記録を持てる相手の数の上限を超えた */
+    | "TooManySubjects";
 
 export interface DroppedEntry {
+    /**
+     * 破棄された値のキー名。
+     *
+     * **コンテンツが渡した文字列で、形式に合わない値もここに載る。**
+     * 読める形にするため、制御文字は `?` に置き換え、長いものは切り詰めてある。
+     */
     key: string;
     reason: DropReason;
+}
+
+/** `dropped` に積む上限。これを超えた分は数えるだけで捨てる */
+const MAX_DROPPED_ENTRIES = 32;
+
+/** `dropped` に載せるキー名の長さ */
+const MAX_DROPPED_KEY_LENGTH = 64;
+
+/**
+ * 破棄したキー名を、控えたり記録に残したりしてよい形にする。
+ *
+ * WHY: キー名はコンテンツが決めた文字列で、形式に合わないものがここへ来る。
+ * 長さも中身も制限が無いので、そのまま持つと巨大な文字列を抱え込むことになり、
+ * 改行を混ぜられるとログの行を偽装される。
+ */
+function describeKey(key: string): string {
+    let safe = "";
+    for (let i = 0; i < key.length && i < MAX_DROPPED_KEY_LENGTH; i++) {
+        const code = key.charCodeAt(i);
+        safe += code < 0x20 || code === 0x7f ? "?" : key.charAt(i);
+    }
+    return key.length > MAX_DROPPED_KEY_LENGTH ? safe + "..." : safe;
+}
+
+function pushDropped(
+    dropped: DroppedEntry[],
+    key: string,
+    reason: DropReason,
+): void {
+    if (dropped.length >= MAX_DROPPED_ENTRIES) {
+        return;
+    }
+    dropped.push({ key: describeKey(key), reason: reason });
 }
 
 export interface NormalizeResult {
@@ -129,36 +197,36 @@ export function normalizeRecordPatch(
     if (!patch || typeof patch !== "object") {
         return { record: record, dropped: dropped };
     }
-    const maxKeys =
-        limits && typeof limits.keysPerPlayer === "number"
-            ? limits.keysPerPlayer
-            : DEFAULT_LIMITS.keysPerPlayer;
-    const maxLength =
-        limits && typeof limits.stringLength === "number"
-            ? limits.stringLength
-            : DEFAULT_LIMITS.stringLength;
+    const maxKeys = readLimit(limits, "keysPerPlayer");
+    const maxLength = readLimit(limits, "stringLength");
     const source = patch as { [key: string]: unknown };
+    // WHY: 値を読むのは 1 つにつき 1 回だけ。読むたびに違う値を返す getter を
+    // 仕込まれると、数えたものと記録するものがずれて上限を越えられる
+    const keys = Object.keys(source);
+    const values: unknown[] = [];
+    for (let i = 0; i < keys.length; i++) {
+        values.push(source[keys[i]]);
+    }
     const known = knownKeys ?? {};
     let count = Object.keys(known).length;
     // WHY: 同じ差分の中で消えるキーは、先に空きとして数える。後回しにすると、
     // 同じ内容の差分でもキーの並び順で結果が変わる
-    for (const key in source) {
-        if (!Object.prototype.hasOwnProperty.call(source, key)) {
-            continue;
-        }
-        if (source[key] === null && known[key] === true) {
+    for (let i = 0; i < keys.length; i++) {
+        if (
+            values[i] === null &&
+            known[keys[i]] === true &&
+            isValidRecordKey(keys[i])
+        ) {
             count--;
         }
     }
-    for (const key in source) {
-        if (!Object.prototype.hasOwnProperty.call(source, key)) {
-            continue;
-        }
+    for (let i = 0; i < keys.length; i++) {
+        const key = keys[i];
+        const value = values[i];
         if (!isValidRecordKey(key)) {
-            dropped.push({ key: key, reason: "InvalidKey" });
+            pushDropped(dropped, key, "InvalidKey");
             continue;
         }
-        const value = source[key];
         // null はキーの削除を表すので、値の検証を通さずそのまま渡す。
         // 消す側が上限で弾かれると、上限に達した記録から抜け出せなくなる
         if (value === null) {
@@ -167,22 +235,22 @@ export function normalizeRecordPatch(
         }
         // 既にあるキーへの上書きは記録を増やさないので、上限には数えない
         if (known[key] !== true && count >= maxKeys) {
-            dropped.push({ key: key, reason: "TooManyKeys" });
+            pushDropped(dropped, key, "TooManyKeys");
             continue;
         }
         const type = typeof value;
         if (type === "number") {
             if (!isFinite(value as number)) {
-                dropped.push({ key: key, reason: "InvalidValue" });
+                pushDropped(dropped, key, "InvalidValue");
                 continue;
             }
         } else if (type === "string") {
             if (countCodePoints(value as string) > maxLength) {
-                dropped.push({ key: key, reason: "TooLong" });
+                pushDropped(dropped, key, "TooLong");
                 continue;
             }
         } else if (type !== "boolean") {
-            dropped.push({ key: key, reason: "InvalidValue" });
+            pushDropped(dropped, key, "InvalidValue");
             continue;
         }
         record[key] = value as ScoreValue;
