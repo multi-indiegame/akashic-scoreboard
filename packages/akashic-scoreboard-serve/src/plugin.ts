@@ -165,10 +165,19 @@ function closeOverlay(): void {
     overlay = null;
     body = null;
     // WHY: 開き直したときは中身が無いので、同じ内容でも描き直す
-    renderedSeq = null;
+    renderedMark = null;
 }
 
-let renderedSeq: number | null = null;
+let renderedMark: string | null = null;
+
+/**
+ * WHY: seq はプレイごとに 1 から振り直される。番号だけで見分けると、プレイを
+ * 切り替えた直後の 1 件目が「描画済み」と同じ番号になり、画面が前のプレイの
+ * ままになる。
+ */
+function markOf(latest: DecodedSnapshot): string {
+    return `${latest.playId}:${latest.seq}`;
+}
 
 function render(): void {
     if (!body) {
@@ -176,10 +185,10 @@ function render(): void {
     }
     const latest = shared.latest;
     // WHY: 同じ内容で描き直すと、スクロール位置と選択が飛ぶ
-    if (latest && latest.seq === renderedSeq) {
+    if (latest && markOf(latest) === renderedMark) {
         return;
     }
-    renderedSeq = latest ? latest.seq : null;
+    renderedMark = latest ? markOf(latest) : null;
     const snapshot: RecordSnapshot = latest
         ? latest.records
         : { play: {}, players: {} };

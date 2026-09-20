@@ -89,7 +89,10 @@ export function decodeSnapshot(event: unknown): DecodedSnapshot | null {
     if (!records || typeof records !== "object" || Array.isArray(records)) {
         return null;
     }
-    const players: RecordSnapshot["players"] = {};
+    // WHY: playerId はコンテンツが決めた文字列で、`__proto__` も来る。素の
+    // オブジェクトへ代入すると、そのプレイヤーの記録がプロパティにならず、
+    // 画面から消える
+    const players: RecordSnapshot["players"] = Object.create(null);
     const source = asObject(records.players);
     for (const id of Object.keys(source)) {
         const record = asRecord(source[id]);
@@ -117,7 +120,7 @@ function asRecord(value: unknown): { [key: string]: RecordValue } | null {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
         return null;
     }
-    const record: { [key: string]: RecordValue } = {};
+    const record: { [key: string]: RecordValue } = Object.create(null);
     const source = value as { [key: string]: unknown };
     for (const key of Object.keys(source)) {
         const entry = source[key];

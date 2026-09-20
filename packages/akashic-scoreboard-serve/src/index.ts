@@ -64,12 +64,18 @@ class ServeBackend implements ScoreboardBackend {
         patch: ScoreRecordPatch,
         rejected: RejectedRecordEntry[],
     ): void {
-        const target =
-            subject.kind === "play"
-                ? this._records.play
-                : (this._records.players[subject.playerId] ??=
-                      Object.create(null));
-        merge(target, patch);
+        // WHY: 記録が 1 つも通らなかった報告で枠を作らない。作ると、実行基盤が
+        // 数えない相手（拡張ライブラリ側で弾かれた報告）でプレイヤーの一覧が
+        // 際限なく増える
+        const keys = Object.keys(patch);
+        if (keys.length > 0) {
+            const target =
+                subject.kind === "play"
+                    ? this._records.play
+                    : (this._records.players[subject.playerId] ??=
+                          Object.create(null));
+            merge(target, patch);
+        }
         // WHY: playerId はコンテンツが決めた任意の文字列。素のまま出すと、
         // 改行を混ぜてログの行を偽装できる
         const label =
@@ -85,8 +91,12 @@ class ServeBackend implements ScoreboardBackend {
                 `[akashic-scoreboard-serve] 記録できない値を捨てました (key: ${entry.key}, reason: ${entry.reason})`,
             );
         }
-        this._write();
-        this._sender.send(this._records);
+        // WHY: 記録が動いていなければ書き出しも送信もしない。弾かれた報告を
+        // 繰り返されても、ファイルと playlog を巻き込まない
+        if (keys.length > 0) {
+            this._write();
+            this._sender.send(this._records);
+        }
     }
 
     _write(): void {

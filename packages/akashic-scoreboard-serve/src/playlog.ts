@@ -151,26 +151,40 @@ export class SnapshotSender {
             return full;
         }
         // WHY: 入るところまでを送る。全部落とすより、途中まででも見えるほうがよい
-        const players: RecordSnapshot["players"] = {};
-        const base = { play: snapshot.play, players: players };
+        const play: RecordSnapshot["play"] = {};
+        const players: RecordSnapshot["players"] = Object.create(null);
+        const base = { play: play, players: players };
         let used = Buffer.byteLength(
             wrap(buildPayload(base, this._playId, seq, true)),
         );
+        // WHY: 部屋の記録も対象にする。上限を大きくした構成では、これだけで
+        // 本文が上限を超えることがある。落とさずにいると 413 のまま戻らない
+        for (const key of Object.keys(snapshot.play)) {
+            const piece = sizeOf(key, snapshot.play[key]);
+            if (used + piece > MAX_BODY_BYTES) {
+                break;
+            }
+            play[key] = snapshot.play[key];
+            used += piece;
+        }
         for (const id of Object.keys(snapshot.players)) {
-            const piece =
-                Buffer.byteLength(
-                    JSON.stringify(id) + JSON.stringify(snapshot.players[id]),
-                ) + 2;
+            const piece = sizeOf(id, snapshot.players[id]);
             if (used + piece > MAX_BODY_BYTES) {
                 break;
             }
             players[id] = snapshot.players[id];
             used += piece;
         }
+        const playKeys = Object.keys(snapshot.play).length;
+        const droppedPlayKeys = playKeys - Object.keys(play).length;
         this._warn(
             "truncated",
-            `記録が大きいため、一部のプレイヤーを落として送りました` +
-                `（${Object.keys(players).length} / ${Object.keys(snapshot.players).length} 人）`,
+            `記録が大きいため、一部を落として送りました` +
+                `（プレイヤー ${Object.keys(players).length} / ${Object.keys(snapshot.players).length} 人` +
+                (droppedPlayKeys > 0
+                    ? `、部屋の記録 ${Object.keys(play).length} / ${playKeys} 件`
+                    : "") +
+                `）`,
         );
         return wrap(buildPayload(base, this._playId, seq, true));
     }
@@ -231,6 +245,13 @@ export class SnapshotSender {
         this._warnedAt[reason] = now;
         console.warn(`[akashic-scoreboard-serve] ${message}`);
     }
+}
+
+function sizeOf(key: string, value: unknown): number {
+    return (
+        Buffer.byteLength(JSON.stringify(key) + JSON.stringify(value ?? null)) +
+        2
+    );
 }
 
 function wrap(payload: unknown): string {
