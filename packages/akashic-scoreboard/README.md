@@ -1,0 +1,136 @@
+# @multi-indiegame/akashic-scoreboard
+
+プレイ記録を実行基盤へ報告するための Akashic Engine 拡張ライブラリ（コンテンツ側）。
+
+ゲームが「このプレイヤーのスコアは 1200 だった」と報告すると、対応している実行基盤がそれを集計して統計として見せます。集計も表示も実行基盤の仕事で、このライブラリは報告するところまでを受け持ちます。
+
+## インストール
+
+```sh
+akashic install @multi-indiegame/akashic-scoreboard
+```
+
+`game.json` に次が入っていれば成功です。
+
+```jsonc
+"environment": {
+  "external": {
+    "scoreboard": "0"
+  }
+}
+```
+
+## 使い方
+
+```javascript
+const scoreboard = require("@multi-indiegame/akashic-scoreboard");
+
+// プレイヤーごとの記録
+scoreboard.setPlayerRecord(playerId, {
+  score: 1200,
+  stage: "3-2",
+  cleared: true,
+});
+
+// プレイヤーに紐づかないプレイ自体の記録
+scoreboard.setPlayRecord({ difficulty: "hard" });
+```
+
+同じキーを後から書くと上書きされ、`null` を渡すとそのキーを消します。
+
+```javascript
+scoreboard.setPlayerRecord(playerId, { score: 3000 }); // 上書き
+scoreboard.setPlayerRecord(playerId, { stage: null }); // 削除
+```
+
+`playerId` は、そのプレイヤーについてコンテンツが観測している in-game playerId（`ev.player.id` の値）を渡してください。
+
+## アクティブインスタンス以外では登録されません
+
+**このライブラリは各プレイヤー(パッシブインスタンス)が自分のスコアを申告するためのものではありません。** 集計されたスコアをアクティブインスタンスが代表して実行基盤に申告するためのものです。
+
+したがって、**アクティブインスタンスに通らない分岐の中で呼ぶと、記録は登録されません。**
+
+```javascript
+// 登録されない。この分岐はプレイヤーの画面でしか通らない
+if (player.id === g.game.selfId) {
+  scoreboard.setPlayerRecord(player.id, { score: score });
+}
+```
+
+```javascript
+// 登録される。このコードは全インスタンスで実行されるため、アクティブインスタンスでの実行で登録される。
+scene.onMessage.add((ev) => {
+  scoreboard.setPlayerRecord(ev.player.id, { score: ev.data.score });
+});
+```
+
+なお、次のように明示的に記述しておくと意図をコードに残しやすいです。
+
+```javascript
+// 動作は変わらない。アクティブインスタンスが登録する、という意図を残すために書く
+if (g.game.isActiveInstance()) {
+  scoreboard.setPlayerRecord(playerId, { score: score });
+}
+```
+
+## なぜアクティブインスタンスだけなのか
+
+このライブラリは、**アクティブインスタンスの報告だけを記録します**。理由は2つあります。
+
+- パッシブインスタンスの報告は、手元で書き換えられる恐れがある
+- アクティブインスタンスはゲーム情報を集約して持っていると期待できる
+
+## API
+
+### `setPlayerRecord(playerId, patch)`
+
+プレイヤーごとの記録を登録します。
+
+### `setPlayRecord(patch)`
+
+プレイヤーに関係しない、プレイ自体に関する記録を登録します。扱いは `setPlayerRecord` と同じです。
+
+### `isSupported()`
+
+このインスタンスから記録が登録できるかを返します。
+
+**結果はローカルです。** 同じ実行基盤の上でも、アクティブインスタンスでは `true`、プレイヤーの画面では `false` になります。記録に関する表示を出すかどうかのようなローカルな判断にだけ使い、**ゲーム状態をこれで分岐させないでください**。
+
+対応していない実行基盤（素の `akashic serve` や Akashic の headless runner）では `false` になり、`setPlayerRecord()` は何もしません。例外は出ないので、対応・非対応のどちらにも同じコンテンツを投稿できます。
+
+## 記録できる値
+
+| 種類                 | 制限                                                                                         |
+| -------------------- | -------------------------------------------------------------------------------------------- |
+| キー名               | 半角英数字と `_` `-` `:` を 1〜32 文字（`^[a-zA-Z0-9_:-]{1,32}$`）。`__proto__` は使えません |
+| 値                   | 有限の number / string / boolean（`NaN` と `Infinity` は不可）                               |
+| キー数               | 既定 100（実行基盤が変えられる）                                                             |
+| string の長さ        | 既定 140 文字（実行基盤が変えられる）                                                        |
+| playerId の長さ      | 既定 64 文字（実行基盤が変えられる）                                                         |
+| 記録を持てる相手の数 | 1 プレイあたり既定 1000（実行基盤が変えられる）                                              |
+
+**上限を決めるのは実行基盤**で、上の既定値は何も指定されなかったときのものです。実行基盤は緩める方向にも厳しくする方向にも指定できます。
+
+**キー数の上限は、1 回の報告ではなく、そのプレイで積み上がった記録全体に掛かります。** 既にあるキーへの上書きは数に入りません。`null` を渡してキーを消せば、そのぶんは空きます。
+
+長すぎる `playerId` の報告は登録されません。`ev.player.id` の値をそのまま渡してください。相手の数の上限に達した後は、まだ記録の無い相手の報告が登録されません。どちらもコンソールに警告が出ます。
+
+形に合わない値は**そのキーだけが廃棄され**、コンソールに警告が出ます。長すぎる string は切り詰めずに廃棄されます（切り詰めると別の値として集計されてしまうため）。
+
+## 動作確認
+
+`akashic serve` で確かめるには [@multi-indiegame/akashic-scoreboard-serve](../akashic-scoreboard-serve) を使ってください。
+ただし、[`@akashic-extension/coe`](https://github.com/akashic-games/coe) を使ったコンテンツでは、代わりに [@multi-indiegame/akashic-scoreboard-serve-coe](../akashic-scoreboard-serve-coe) を使ってください。
+
+## 実行基盤を作る方は
+
+[@multi-indiegame/akashic-scoreboard-plugin](../akashic-scoreboard-plugin) を参照してください。
+
+## 仕様
+
+[akashic-external-protocol](https://github.com/multi-indiegame/akashic-external-protocol) に従います。
+
+## ライセンス
+
+MIT

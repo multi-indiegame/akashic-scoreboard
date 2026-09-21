@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "target": "ES6",
+    "lib": ["ES6"],
+    "outDir": "lib",
+    "rootDir": "src",
+    "allowUmdGlobalAccess": true
+  },
+  "files": ["../../node_modules/@akashic/akashic-engine/index.runtime.d.ts"],
+  "include": ["src"]
+}

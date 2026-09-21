@@ -1,0 +1,31 @@
+{
+  "name": "akashic-scoreboard-workspace",
+  "private": true,
+  "description": "プレイ記録を実行基盤へ報告する Akashic Engine 拡張",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/multi-indiegame/akashic-scoreboard.git"
+  },
+  "license": "MIT",
+  "workspaces": [
+    "packages/akashic-scoreboard",
+    "packages/akashic-scoreboard-plugin",
+    "packages/akashic-scoreboard-serve",
+    "packages/akashic-scoreboard-serve-coe"
+  ],
+  "scripts": {
+    "build": "npm run build -w @multi-indiegame/akashic-scoreboard && npm run build -w @multi-indiegame/akashic-scoreboard-plugin && npm run build -w @multi-indiegame/akashic-scoreboard-serve && npm run build -w @multi-indiegame/akashic-scoreboard-serve-coe",
+    "clean": "rimraf packages/*/lib",
+    "format": "prettier --write .",
+    "version-packages": "changeset version && npm install --package-lock-only"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^3.0.2",
+    "prettier": "^3.9.6",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.7.2"
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true
+  }
+}

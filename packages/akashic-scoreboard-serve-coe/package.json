@@ -1,0 +1,47 @@
+{
+  "name": "@multi-indiegame/akashic-scoreboard-serve-coe",
+  "version": "0.1.0",
+  "description": "coe コンテンツで、プレイ記録を akashic serve の画面で確認するための実行基盤の代役（experimental）",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./server.js": {
+      "types": "./lib/server.d.ts",
+      "default": "./lib/server.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "package.json",
+    "CHANGELOG.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "clean": "rimraf ./lib",
+    "build": "npm run clean && tsc -p ./ && node ./scripts/copy-plugin.js",
+    "prepublishOnly": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/multi-indiegame/akashic-scoreboard.git",
+    "directory": "packages/akashic-scoreboard-serve-coe"
+  },
+  "keywords": [
+    "akashic",
+    "akashic-serve",
+    "coe"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@multi-indiegame/akashic-scoreboard-serve": "^1.0.0"
+  },
+  "devDependencies": {
+    "rimraf": "^6.0.1",
+    "typescript": "^5.7.2"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
