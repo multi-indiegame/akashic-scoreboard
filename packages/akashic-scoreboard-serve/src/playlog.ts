@@ -32,6 +32,9 @@ const MAX_BODY_BYTES = 80 * 1024;
 /** 送信に失敗したときに、同じ内容をもう一度試すまでの間隔 */
 const RETRY_MS = 3000;
 
+/** 応答を待つ時間 */
+const REQUEST_TIMEOUT_MS = 5000;
+
 /** 同じ理由の警告を出し直すまでの間隔 */
 const WARN_INTERVAL_MS = 30 * 1000;
 
@@ -101,6 +104,22 @@ export class SnapshotSender {
             this._playId == null
                 ? "/api/public/v1/plays/latest/playlog"
                 : `/api/public/v1/plays/${this._playId}/playlog`;
+        // WHY: 後始末は一度だけ。タイムアウトと error が続けて起きても、
+        // _inFlight を戻すのと再送の予約が二重にならないようにする
+        let settled = false;
+        const settle = (reason: string | null, message?: string) => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            this._inFlight = false;
+            if (reason == null) {
+                this._flush();
+                return;
+            }
+            this._warn(reason, message ?? reason);
+            this._retryLater(snapshot);
+        };
         const req = client.request(
             {
                 host: this._origin.hostname,
@@ -115,26 +134,32 @@ export class SnapshotSender {
             (res) => {
                 // WHY: 読み捨てないと socket が解放されない
                 res.resume();
-                this._inFlight = false;
                 if (res.statusCode === 200) {
-                    this._flush();
+                    settle(null);
                     return;
                 }
-                this._warn(
+                settle(
                     `status:${res.statusCode}`,
                     `akashic serve の playlog API が ${res.statusCode} を返しました` +
                         `（送信量 ${Buffer.byteLength(body)} バイト）。画面の記録が古いままになります`,
                 );
-                this._retryLater(snapshot);
             },
         );
         req.on("error", (err) => {
-            this._inFlight = false;
-            this._warn(
+            settle(
                 `error:${err.message}`,
                 `akashic serve へ記録を送れませんでした: ${err.message}`,
             );
-            this._retryLater(snapshot);
+        });
+        // WHY: 接続はできるのに応答が返らない相手だと、応答も error も起きない。
+        // 打ち切らないと送信中のまま固まり、以後の記録が画面に出なくなる
+        req.setTimeout(REQUEST_TIMEOUT_MS, () => {
+            req.destroy();
+            settle(
+                "timeout",
+                `akashic serve から応答がありません（${REQUEST_TIMEOUT_MS} ミリ秒）。` +
+                    "送信先が合っているか確かめてください",
+            );
         });
         req.end(body);
     }
