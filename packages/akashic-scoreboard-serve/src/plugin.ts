@@ -385,8 +385,9 @@ function recover(): void {
     }
     fetch(`/api/plays/${playId}/playlog`)
         .then((res) => (res.ok ? res.json() : null))
-        .then((body: { data?: { tickList?: unknown } } | null) => {
-            for (const event of collectEvents(body?.data)) {
+        // WHY: この API は dump をそのまま返す。`data` では包まれていない
+        .then((body: { tickList?: unknown } | null) => {
+            for (const event of collectEvents(body?.tickList)) {
                 const decoded = decodeSnapshot(event);
                 if (decoded) {
                     accept(decoded);
@@ -401,16 +402,29 @@ function recover(): void {
 /**
  * WHY: playlog の形は cli-serve の内部の取り決めで、版によって変わりうる。
  * 深さを決め打ちせず、イベントらしい配列を拾って decodeSnapshot に判定させる。
+ *
+ * いまの形は `tickList` が `[開始 age, 終了 age, tick[]]`、tick が
+ * `[age, event[], ストレージ]`、event が `[種別, フラグ, playerId, ...]` で、
+ * 4 段沈んでいる。
  */
+const MAX_PLAYLOG_DEPTH = 6;
+
 function collectEvents(value: unknown, depth = 0): unknown[] {
-    if (!Array.isArray(value) || depth > 4) {
+    if (!value || typeof value !== "object" || depth > MAX_PLAYLOG_DEPTH) {
         return [];
     }
-    if (typeof value[0] === "number" && value.length >= 4) {
+    if (
+        Array.isArray(value) &&
+        typeof value[0] === "number" &&
+        value.length >= 4
+    ) {
         return [value];
     }
     const found: unknown[] = [];
-    for (const child of value) {
+    const children = Array.isArray(value)
+        ? value
+        : Object.values(value as { [key: string]: unknown });
+    for (const child of children) {
         for (const event of collectEvents(child, depth + 1)) {
             found.push(event);
         }

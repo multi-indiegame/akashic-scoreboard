@@ -237,6 +237,19 @@ export class SnapshotSender {
     _resolvePlayId(): void {
         this._attempts++;
         const client = this._origin.protocol === "https" ? https : http;
+        // WHY: 後始末は一度だけ。打ち切ったあとに error も続くので、そのままだと
+        // 1 回の失敗でやり直しが 2 本走り、試行回数を食い潰す
+        let settled = false;
+        const settle = (text: string | null) => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            if (text != null) {
+                this._playId = ownPlayId(text, this._bornAt);
+            }
+            this._done();
+        };
         const req = client.request(
             {
                 host: this._origin.hostname,
@@ -248,16 +261,13 @@ export class SnapshotSender {
                 let text = "";
                 res.setEncoding("utf8");
                 res.on("data", (chunk: string) => (text += chunk));
-                res.on("end", () => {
-                    this._playId = ownPlayId(text, this._bornAt);
-                    this._done();
-                });
+                res.on("end", () => settle(text));
             },
         );
-        req.on("error", () => this._done());
+        req.on("error", () => settle(null));
         req.setTimeout(2000, () => {
             req.destroy();
-            this._done();
+            settle(null);
         });
         req.end();
     }
