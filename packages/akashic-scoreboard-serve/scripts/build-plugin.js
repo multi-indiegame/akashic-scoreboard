@@ -1,5 +1,5 @@
 /*
- * src/plugin.ts → plugin.js。
+ * src/plugin.ts → lib/index.js。
  *
  * WHY: akashic serve は client.external にパスを渡された 1 ファイルを、
  * module と exports しか無いスコープで評価する。require() が無いので、
@@ -20,7 +20,7 @@ const root = path.join(__dirname, "..");
 esbuild
     .build({
         entryPoints: [path.join(root, "src", "plugin.ts")],
-        outfile: path.join(root, "plugin.js"),
+        outfile: path.join(root, "lib", "index.js"),
         bundle: true,
         format: "iife",
         globalName: "__scoreboardServePlugin",

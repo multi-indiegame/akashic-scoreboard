@@ -16,6 +16,42 @@ export const RESERVED_PLAYER_ID = ":multi-indiegame";
 /** playlog.EventCode.Message */
 export const EVENT_CODE_MESSAGE = 32;
 
+/** playlog.EventCode.Operation */
+export const EVENT_CODE_OPERATION = 64;
+
+/**
+ * スナップショットを載せる playlog イベントの種別。
+ *
+ * - `message`: MessageEvent で運ぶ（既定）
+ * - `operation`: OperationEvent で運ぶ
+ *
+ * WHY: coe (@akashic-extension/coe) の Scene は**届いた g.MessageEvent を
+ * すべて握りつぶす**（Scene の JSDoc にも明記されている）。アクティブ
+ * インスタンスのイベントフィルタで消えるため、ティックにも playlog の
+ * ダンプにも現れず、coe コンテンツでは画面が永久に空のままになる。coe の
+ * フィルタが落とすのは 0x20 だけで、それ以外の種別は素通しする。
+ *
+ * WHY: 既定を差し替えないのは、OperationEvent が本来**操作プラグインのための
+ * 種別**だから。コンテンツが game.json の `operationPlugins` で宣言した code の
+ * 操作を、コンテンツ自身が受け取る、という往復が前提にある。こちらは code を
+ * 宣言せずに占有し、読むのもコンテンツではなくブラウザ側の道具なので、本来の
+ * 使い方からは外れている。coe のために避けられないときだけ使う。
+ */
+export type SnapshotTransport = "message" | "operation";
+
+/**
+ * OperationEvent で運ぶときの操作プラグインコードの既定値。
+ *
+ * WHY: code には予約の仕組みが無く、コンテンツが `akashic install -p <code>` で
+ * 好きな番号を宣言できる。慣習的に使われる小さい番号を避けて大きい値を選ぶ。
+ * 0x6d69 は "mi"（multi-indiegame）。それでも衝突する相手はいるので、利用者が
+ * 番号を差し替えられるようにしてある。
+ *
+ * WHY: 受け取る側はこの番号では判定しない（playerId と type で判定する）。
+ * だから番号を変えてもブラウザ側は直さずに済む。
+ */
+export const DEFAULT_SNAPSHOT_OPERATION_CODE = 0x6d69;
+
 export const SNAPSHOT_TYPE = "@multi-indiegame/akashic-scoreboard-serve";
 export const SNAPSHOT_VERSION = 2;
 
@@ -35,7 +71,7 @@ export interface SnapshotPayload {
     seq: number;
     /** 送った時刻（ミリ秒） */
     at: number;
-    /** 大きすぎて一部のプレイヤーを落としたか */
+    /** 大きすぎて一部のプレイヤーを破棄したか */
     truncated: boolean;
     records: RecordSnapshot;
 }
@@ -66,19 +102,56 @@ export function buildPayload(
 }
 
 /**
+ * スナップショットを playlog のイベントに仕立てる。
+ *
+ * WHY: 種別が 2 通りあるので、組み立てと読み取りを 1 つのファイルに並べて置く。
+ * 片方だけ直すと、送ったのに画面に出ない、という気づきにくい壊れ方をする。
+ */
+export function encodeSnapshotEvent(
+    payload: SnapshotPayload,
+    transport: SnapshotTransport,
+    operationCode: number = DEFAULT_SNAPSHOT_OPERATION_CODE,
+): unknown[] {
+    if (transport === "operation") {
+        // [種別, フラグ, playerId, 操作プラグインコード, データ, ローカルか]
+        return [
+            EVENT_CODE_OPERATION,
+            0,
+            RESERVED_PLAYER_ID,
+            operationCode,
+            payload,
+            false,
+        ];
+    }
+    // [種別, フラグ, playerId, データ]
+    return [EVENT_CODE_MESSAGE, 0, RESERVED_PLAYER_ID, payload];
+}
+
+/**
  * 受け取ったイベントが自分宛のスナップショットかを判定する。宛先違い・版違いは null。
  *
  * WHY: 形を検めてから返す。送り手は自分だけのはずだが、版の食い違いや他の拡張の
  * 事故で違う形が来たとき、壊れた表を出すより何も出さないほうがよい。
+ *
+ * WHY: 両方の種別を受ける。ブラウザ側のプラグインを 1 つで済ませるためで、
+ * MessageEvent 版と OperationEvent 版のどちらのバックエンドを挿しても同じ画面が
+ * 出る。どちらで来たかは画面に出す必要が無い。
  */
 export function decodeSnapshot(event: unknown): DecodedSnapshot | null {
-    if (!Array.isArray(event) || event[0] !== EVENT_CODE_MESSAGE) {
+    if (!Array.isArray(event)) {
+        return null;
+    }
+    const code = event[0];
+    if (code !== EVENT_CODE_MESSAGE && code !== EVENT_CODE_OPERATION) {
         return null;
     }
     if (event[2] !== RESERVED_PLAYER_ID) {
         return null;
     }
-    const data = event[3] as SnapshotPayload | undefined;
+    // WHY: OperationEvent では、データの前に操作プラグインコードが挟まる。
+    // その番号自体は見ない（自分宛かどうかは下の type と版で分かる）
+    const data = (code === EVENT_CODE_OPERATION ? event[4] : event[3]) as
+        SnapshotPayload | undefined;
     if (!data || typeof data !== "object") {
         return null;
     }

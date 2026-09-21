@@ -4,13 +4,15 @@
 
 **Akashic Engine のマルチモード**で動くコンテンツを作っている方向けです。実行基盤に組み込むものではありません（それは [`@multi-indiegame/akashic-scoreboard-plugin`](../akashic-scoreboard-plugin) です）。
 
+> **[`@akashic-extension/coe`](https://github.com/akashic-games/coe) を使ったコンテンツでは、このパッケージは使えません。** 記録は受け取られますが、「スコアボード」タブに出てきません（`akashic serve` を起動した端末には出ます）。coe を使っているなら [`@multi-indiegame/akashic-scoreboard-serve-coe`](../akashic-scoreboard-serve-coe) を使ってください。できることは同じです。
+
 ## これは何をするか
 
 素の `akashic serve` は scoreboard に対応していないので、そのままでは `isSupported()` が `false` になり、`setPlayerRecord()` を呼んでも何も起きません。このパッケージを `sandbox.config.js` から読ませると、`akashic serve` の中で実行基盤の代役を務めます。
 
 - アクティブインスタンスに `g.game.external.scoreboard` を生やします
 - 登録された記録を **akashic serve の画面内**に出します（ドックの「スコアボード」タブ → 全画面表示）
-- 記録をコンソールにも出します
+- 記録を **`akashic serve` を起動した端末**にも出します
 - 形が合わずに破棄された値も警告として出します
 - 記録は実行基盤と同じようにマージ（後勝ち・`null` で削除）して保持します
 - 指定すれば、その結果を JSON ファイルにも書き出します（既定では書き出しません）
@@ -52,13 +54,13 @@ module.exports = {
   // ... 既存の設定
   server: {
     external: {
-      scoreboard: require.resolve("@multi-indiegame/akashic-scoreboard-serve"),
+      scoreboard:
+        require.resolve("@multi-indiegame/akashic-scoreboard-serve/server.js"),
     },
   },
   client: {
     external: {
-      scoreboard:
-        require.resolve("@multi-indiegame/akashic-scoreboard-serve/plugin.js"),
+      scoreboard: require.resolve("@multi-indiegame/akashic-scoreboard-serve"),
     },
   },
 };
@@ -66,9 +68,7 @@ module.exports = {
 
 `require()` ではなく `require.resolve()` です。`akashic serve` に渡すのはパスであって値ではありません。
 
-2 つ要るのは、**記録が登録される場所と画面を出す場所が違う**からです。この拡張が生えるのはアクティブインスタンス（akashic serve ではサーバ側）なので記録はそちらへ送信されますが、操作盤を出せるのはブラウザ側です。サーバ側が受け取った記録を playlog へ流し、ブラウザ側がそれを拾って表示します。
-
-`client.external` を省くと画面には出ませんが、コンソールへの出力は動きます。
+`client.external` を省くと画面には出ませんが、端末への出力は動きます。
 
 ### 4. 起動する
 
@@ -89,13 +89,11 @@ akashic serve
 
 akashic serve の画面右端に出る**「スコアボード」タブ**を押すと、いま記録されている内容が全画面で出ます。記録が入るたびに更新されます。閉じるときは「閉じる」か、背景を押してください。
 
-ゲームを操作しながら常に見るものではない想定なので、全画面にしています。
-
-画面の先頭には**最終更新の時刻と、どのプレイの記録か**が出ます。送信に失敗したときや、次の注意書きのとおり一部を落として送ったときに、古い値を現在の値として読まないためのものです。
+画面の先頭には**最終更新の時刻と、どのプレイの記録か**が出ます。送信に失敗したときや、次の注意書きのとおり一部を破棄して送ったときに、古い値を現在の値として読まないためのものです。
 
 ### 記録が大きいときの注意
 
-akashic serve は 100KB を超える送信を受け付けません。記録の全体がそれに近づくと、**入るところまでを送ります。** 落ちるのはプレイヤーの記録だけとは限らず、[上限を大きくした](#上限を本番に合わせる)構成ではプレイ自体の記録も落ちます。そのときは画面に「記録が大きいため、一部の記録を表示していません（プレイ自体の記録を含みます）」と出て、コンソールには何を何件送ったか（プレイヤー N / M 人、プレイ自体の記録 N / M 件）が出ます。ファイルへの書き出しと `record()` の呼び出し自体は、落とさず全件のままです。
+akashic serve は 100KB を超える送信を受け付けません。記録の全体がそれに近づくと、**入るところまでを送ります。** 破棄されるのはプレイヤーの記録だけとは限らず、[上限を大きくした](#上限を本番に合わせる)構成ではプレイ自体の記録も破棄されます。そのときは画面に「記録が大きいため、一部の記録を表示していません（プレイ自体の記録を含みます）」と出て、`akashic serve` を起動した端末には何を何件送ったか（プレイヤー N / M 人、プレイ自体の記録 N / M 件）が出ます。破棄されるのは画面に送る分だけで、ファイルへの書き出しと端末への出力は全件のままです。
 
 ### 複数のプレイを開いたとき
 
@@ -121,6 +119,8 @@ akashic serve は 100KB を超える送信を受け付けません。記録の�
 
 ## 設定
 
+環境変数でも `sandbox.config.js` の `configure()` でも指定できます。両方に書いたときは `configure()` の指定を使います。
+
 ### 記録をファイルに書き出す
 
 **既定ではファイルを作りません。** 記録はメモリ上にだけ持ちます。diff を取りたいときなど、ファイルが必要なときだけ書き出し先を指定してください。
@@ -145,28 +145,36 @@ AKASHIC_SCOREBOARD_SERVE_ORIGIN=http://localhost:3400 akashic serve --port 3400
 
 ### 上限を本番に合わせる
 
-自分のファイルを経由させてください。`server.external` に書いたパスは `require` され、その `module.exports` が引数なしで呼ばれます。
-
-```javascript
-// scoreboard-serve.js
-const createScoreboardExternal = require("@multi-indiegame/akashic-scoreboard-serve");
-
-module.exports = () =>
-  createScoreboardExternal({
-    outputPath: "./tmp/records.json",
-    serveOrigin: "http://localhost:3400",
-    limits: { keysPerPlayer: 16, stringLength: 64 },
-  });
-```
+`sandbox.config.js` の中で `configure()` を呼び出し、設定をカスタマイズしてください。
 
 ```javascript
 // sandbox.config.js
+const scoreboardServe = require("@multi-indiegame/akashic-scoreboard-serve/server.js");
+
+scoreboardServe.configure({
+  outputPath: "./tmp/records.json",
+  serveOrigin: "http://localhost:3400",
+  limits: { keysPerPlayer: 16, stringLength: 64 },
+});
+
 module.exports = {
-  server: { external: { scoreboard: "./scoreboard-serve.js" } },
+  server: {
+    external: {
+      scoreboard:
+        require.resolve("@multi-indiegame/akashic-scoreboard-serve/server.js"),
+    },
+  },
+  client: {
+    external: {
+      scoreboard: require.resolve("@multi-indiegame/akashic-scoreboard-serve"),
+    },
+  },
 };
 ```
 
-## ご注意: MessageEvent が全インスタンスに配信されます
+指定したキーだけが変わります。`akashic serve` を起動したまま `sandbox.config.js` を書き換えた場合は、プレイを作り直せば新しい設定になります。
+
+## 注意点: MessageEvent が全インスタンスに配信されます
 
 記録が更新されるたびに、次の MessageEvent が playlog に載り、**全インスタンスへ配信されます**。画面に出すために、サーバ側で受け取った記録をブラウザ側へ運ぶ必要があるためです。
 
@@ -177,7 +185,9 @@ module.exports = {
 
 コンテンツ側で `g.MessageEvent` を扱っている場合は、**自分宛でない `type` を無視してください**。このイベントは playlog のダウンロードにも含まれ、リプレイ時にも再生されます。
 
-`type` は**このパッケージの名前**です。拡張本体（`@multi-indiegame/akashic-scoreboard`）の名前ではありません。akashic-scoreboard は実行基盤からコンテンツへの通知を定めない拡張なので、本番の実行基盤でこのイベントが配信されることはありません。
+配信されるのは `akashic serve` で動作確認しているときだけです。**本番の実行基盤でこのイベントが配信されることはありません。**
+
+[`@multi-indiegame/akashic-scoreboard-serve-coe`](../akashic-scoreboard-serve-coe) では、これが MessageEvent ではなく OperationEvent で流れます（`playerId` と `type` は同じです）。
 
 ## 代行していないこと
 

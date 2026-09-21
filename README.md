@@ -6,11 +6,12 @@
 
 ## パッケージ
 
-| パッケージ                                                                       | 読み手           | 役割                                               |
-| -------------------------------------------------------------------------------- | ---------------- | -------------------------------------------------- |
-| [@multi-indiegame/akashic-scoreboard](packages/akashic-scoreboard)               | ゲーム開発者     | コンテンツに入れる本体                             |
-| [@multi-indiegame/akashic-scoreboard-plugin](packages/akashic-scoreboard-plugin) | 実行基盤の開発者 | 記録を受け取る側の橋渡し                           |
-| [@multi-indiegame/akashic-scoreboard-serve](packages/akashic-scoreboard-serve)   | ゲーム開発者     | `akashic serve` で動作確認するための実行基盤の代役 |
+| パッケージ                                                                             | 読み手           | 役割                                                                                |
+| -------------------------------------------------------------------------------------- | ---------------- | ----------------------------------------------------------------------------------- |
+| [@multi-indiegame/akashic-scoreboard](packages/akashic-scoreboard)                     | ゲーム開発者     | コンテンツに入れる本体                                                              |
+| [@multi-indiegame/akashic-scoreboard-plugin](packages/akashic-scoreboard-plugin)       | 実行基盤の開発者 | 記録を受け取る側の橋渡し                                                            |
+| [@multi-indiegame/akashic-scoreboard-serve](packages/akashic-scoreboard-serve)         | ゲーム開発者     | `akashic serve` で動作確認するための実行基盤の代役                                  |
+| [@multi-indiegame/akashic-scoreboard-serve-coe](packages/akashic-scoreboard-serve-coe) | ゲーム開発者     | coe コンテンツを `akashic serve` で動作確認するための実行基盤の代役（experimental） |
 
 ## 設計の指針
 

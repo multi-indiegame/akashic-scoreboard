@@ -13,10 +13,11 @@
 import * as http from "http";
 import * as https from "https";
 import {
-    EVENT_CODE_MESSAGE,
-    RESERVED_PLAYER_ID,
     RecordSnapshot,
+    SnapshotPayload,
+    SnapshotTransport,
     buildPayload,
+    encodeSnapshotEvent,
 } from "./channel";
 
 const PLAYS_PATH = "/api/plays";
@@ -25,7 +26,7 @@ const PLAYS_PATH = "/api/plays";
  * cli-serve の body parser は 100KB で弾く。そこに届く前に自分で切り詰める。
  *
  * WHY: 413 で弾かれると、記録は増える一方なので以後のスナップショットが
- * すべて落ちる。表示が止まったまま戻らなくなる。
+ * すべて送れなくなる。表示が止まったまま戻らなくなる。
  */
 const MAX_BODY_BYTES = 80 * 1024;
 
@@ -56,6 +57,8 @@ const RESOLVE_RETRY_MS = 500;
 
 export class SnapshotSender {
     _origin: ServeOrigin;
+    _transport: SnapshotTransport;
+    _operationCode: number;
     _playId: number | null = null;
     _resolved = false;
     /**
@@ -73,8 +76,14 @@ export class SnapshotSender {
     _retry: NodeJS.Timeout | null = null;
     _warnedAt: { [reason: string]: number } = Object.create(null);
 
-    constructor(origin: ServeOrigin) {
+    constructor(
+        origin: ServeOrigin,
+        transport: SnapshotTransport,
+        operationCode: number,
+    ) {
         this._origin = origin;
+        this._transport = transport;
+        this._operationCode = operationCode;
         this._resolvePlayId();
     }
 
@@ -165,8 +174,8 @@ export class SnapshotSender {
     }
 
     /**
-     * WHY: 失敗したまま次の記録を待つと、最後の 1 件が落ちたときに画面が
-     * 古いまま止まる。新しい記録が来ていなければ同じ内容をもう一度試す。
+     * WHY: 失敗したまま次の記録を待つと、最後の 1 件の送信に失敗したときに
+     * 画面が古いまま止まる。新しい記録が来ていなければ同じ内容をもう一度試す。
      */
     _retryLater(snapshot: RecordSnapshot): void {
         if (this._retry) {
@@ -184,11 +193,21 @@ export class SnapshotSender {
 
     _buildBody(snapshot: RecordSnapshot): string {
         const seq = ++this._seq;
+        const wrap = (payload: SnapshotPayload): string =>
+            JSON.stringify({
+                events: [
+                    encodeSnapshotEvent(
+                        payload,
+                        this._transport,
+                        this._operationCode,
+                    ),
+                ],
+            });
         const full = wrap(buildPayload(snapshot, this._playId, seq, false));
         if (Buffer.byteLength(full) <= MAX_BODY_BYTES) {
             return full;
         }
-        // WHY: 入るところまでを送る。全部落とすより、途中まででも見えるほうがよい
+        // WHY: 入るところまでを送る。全部破棄するより、途中まででも見えるほうがよい
         const play: RecordSnapshot["play"] = {};
         const players: RecordSnapshot["players"] = Object.create(null);
         const base = { play: play, players: players };
@@ -196,7 +215,7 @@ export class SnapshotSender {
             wrap(buildPayload(base, this._playId, seq, true)),
         );
         // WHY: プレイ自体の記録も対象にする。上限を大きくした構成では、これだけで
-        // 本文が上限を超えることがある。落とさずにいると 413 のまま戻らない
+        // 本文が上限を超えることがある。破棄せずにいると 413 のまま戻らない
         for (const key of Object.keys(snapshot.play)) {
             const piece = sizeOf(key, snapshot.play[key]);
             if (used + piece > MAX_BODY_BYTES) {
@@ -217,7 +236,7 @@ export class SnapshotSender {
         const droppedPlayKeys = playKeys - Object.keys(play).length;
         this._warn(
             "truncated",
-            `記録が大きいため、一部を落として送りました` +
+            `記録が大きいため、一部を破棄して送りました` +
                 `（プレイヤー ${Object.keys(players).length} / ${Object.keys(snapshot.players).length} 人` +
                 (droppedPlayKeys > 0
                     ? `、プレイ自体の記録 ${Object.keys(play).length} / ${playKeys} 件`
@@ -317,12 +336,6 @@ function sizeOf(key: string, value: unknown): number {
         Buffer.byteLength(JSON.stringify(key) + JSON.stringify(value ?? null)) +
         2
     );
-}
-
-function wrap(payload: unknown): string {
-    return JSON.stringify({
-        events: [[EVENT_CODE_MESSAGE, 0, RESERVED_PLAYER_ID, payload]],
-    });
 }
 
 /**

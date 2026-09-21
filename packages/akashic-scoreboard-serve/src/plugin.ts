@@ -35,7 +35,9 @@ interface GameContentLike {
 interface ServeGlobals {
     store?: {
         currentLocalInstance?: { gameContent?: GameContentLike } | null;
-        currentPlay?: { playId?: number } | null;
+        // WHY: cli-serve は playId を**文字列**で持つ（API も "0" のように返す）。
+        // 数値だと思って扱うと、サーバ側が payload に入れた数値と一致しなくなる
+        currentPlay?: { playId?: number | string } | null;
     } | null;
 }
 
@@ -46,6 +48,24 @@ const serve = (): ServeGlobals | null => {
     };
     return host.akashicServe ?? host.__testbed ?? null;
 };
+
+/**
+ * いま開いているプレイの id を数値で読む。
+ *
+ * WHY: 送られてくるスナップショットの playId は数値（サーバ側が cli-serve の
+ * API から拾って数値にしている）。こちらは cli-serve のストアから読むので
+ * 文字列で来る。揃えずに `!==` で突き合わせると、`0 !== "0"` が成り立って
+ * **すべてのスナップショットが別プレイ宛として捨てられる**。画面は記録を
+ * 1 件も受け取らないまま空のままになる。
+ */
+function currentPlayId(): number | null {
+    const raw = serve()?.store?.currentPlay?.playId;
+    if (raw == null) {
+        return null;
+    }
+    const id = Number(raw);
+    return Number.isFinite(id) ? id : null;
+}
 
 /**
  * 受け取った最新のスナップショット。
@@ -231,11 +251,11 @@ function status(latest: DecodedSnapshot | null): HTMLElement {
                 "div",
                 { color: "#a4471c" },
                 {
-                    // WHY: 落とすのはプレイヤーだけではない。プレイ自体の記録だけが
+                    // WHY: 破棄するのはプレイヤーだけではない。プレイ自体の記録だけが
                     // 欠けている場合もあるので、どちらとも読める言い方にする
                     textContent:
                         "記録が大きいため、一部の記録を表示していません（プレイ自体の記録を含みます）。" +
-                        "何を落としたかは akashic serve のコンソールに出ています。",
+                        "何を破棄したかは akashic serve を起動した端末に出ています。",
                 },
             ),
         );
@@ -348,7 +368,7 @@ function attach(): boolean {
     // WHY: プレイが変わったら、前のプレイの記録を消す。新しいプレイがまだ
     // 何も記録していないときは拾い直しても何も来ないので、消さないと古い内容が
     // 残り続ける
-    const playId = serve()?.store?.currentPlay?.playId ?? null;
+    const playId = currentPlayId();
     if (playId !== shared.playId) {
         shared.playId = playId;
         shared.latest = null;
@@ -379,7 +399,7 @@ function attach(): boolean {
 
 /** いまのプレイの playlog から、最後のスナップショットを拾い直す */
 function recover(): void {
-    const playId = serve()?.store?.currentPlay?.playId;
+    const playId = currentPlayId();
     if (playId == null || typeof fetch !== "function") {
         return;
     }
