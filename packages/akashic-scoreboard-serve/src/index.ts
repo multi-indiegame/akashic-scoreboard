@@ -65,17 +65,10 @@ class ServeBackend implements ScoreboardBackend {
         rejected: RejectedRecordEntry[],
     ): void {
         // WHY: 記録が 1 つも通らなかった報告で枠を作らない。作ると、実行基盤が
-        // 数えない相手（拡張ライブラリ側で弾かれた報告）でプレイヤーの一覧が
-        // 際限なく増える
+        // 数えない相手（拡張ライブラリ側で弾かれた報告や、キーを消すだけの
+        // 報告）でプレイヤーの一覧が際限なく増える
         const keys = Object.keys(patch);
-        if (keys.length > 0) {
-            const target =
-                subject.kind === "play"
-                    ? this._records.play
-                    : (this._records.players[subject.playerId] ??=
-                          Object.create(null));
-            merge(target, patch);
-        }
+        const changed = keys.length > 0 && this._merge(subject, patch);
         // WHY: playerId はコンテンツが決めた任意の文字列。素のまま出すと、
         // 改行を混ぜてログの行を偽装できる
         const label =
@@ -93,10 +86,33 @@ class ServeBackend implements ScoreboardBackend {
         }
         // WHY: 記録が動いていなければ書き出しも送信もしない。弾かれた報告を
         // 繰り返されても、ファイルと playlog を巻き込まない
-        if (keys.length > 0) {
+        if (changed) {
             this._write();
             this._sender.send(this._records);
         }
+    }
+
+    /** 記録が動いたら true。動かなければ相手の枠も残さない */
+    _merge(subject: ScoreRecordSubject, patch: ScoreRecordPatch): boolean {
+        if (subject.kind === "play") {
+            merge(this._records.play, patch);
+            return true;
+        }
+        const playerId = subject.playerId;
+        const existing = this._records.players[playerId];
+        const target = existing ?? (Object.create(null) as RecordValues);
+        merge(target, patch);
+        // WHY: 記録が 1 つも残らない相手は持たない。キーを消すだけの報告を
+        // 別の名前で繰り返されると、空の枠だけが積み上がる
+        if (Object.keys(target).length === 0) {
+            if (existing) {
+                delete this._records.players[playerId];
+                return true;
+            }
+            return false;
+        }
+        this._records.players[playerId] = target;
+        return true;
     }
 
     _write(): void {
@@ -127,10 +143,9 @@ class ServeBackend implements ScoreboardBackend {
     }
 }
 
-function merge(
-    target: { [key: string]: number | string | boolean },
-    patch: ScoreRecordPatch,
-): void {
+type RecordValues = { [key: string]: number | string | boolean };
+
+function merge(target: RecordValues, patch: ScoreRecordPatch): void {
     for (const key of Object.keys(patch)) {
         const value = patch[key];
         if (value === null) {
