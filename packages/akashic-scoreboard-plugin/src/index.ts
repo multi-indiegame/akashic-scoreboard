@@ -24,7 +24,7 @@ export {
     normalizeRecordPatch,
 } from "@multi-indiegame/akashic-scoreboard/protocol";
 
-/** 記録の宛先。プレイヤーごとの記録か、部屋そのものの記録か */
+/** 記録の宛先。プレイヤーごとの記録か、プレイ自体の記録か */
 export type ScoreRecordSubject =
     { kind: "player"; playerId: string } | { kind: "play" };
 

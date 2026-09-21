@@ -197,7 +197,7 @@ function render(): void {
         : { play: {}, players: {} };
     body.textContent = "";
     body.appendChild(status(latest));
-    body.appendChild(section("部屋の記録", snapshot.play));
+    body.appendChild(section("プレイ自体の記録", snapshot.play));
     const ids = Object.keys(snapshot.players);
     if (ids.length === 0) {
         body.appendChild(section("プレイヤーの記録", {}));
@@ -231,10 +231,10 @@ function status(latest: DecodedSnapshot | null): HTMLElement {
                 "div",
                 { color: "#a4471c" },
                 {
-                    // WHY: 落とすのはプレイヤーだけではない。部屋の記録だけが
+                    // WHY: 落とすのはプレイヤーだけではない。プレイ自体の記録だけが
                     // 欠けている場合もあるので、どちらとも読める言い方にする
                     textContent:
-                        "記録が大きいため、一部の記録を表示していません（部屋の記録を含みます）。" +
+                        "記録が大きいため、一部の記録を表示していません（プレイ自体の記録を含みます）。" +
                         "何を落としたかは akashic serve のコンソールに出ています。",
                 },
             ),

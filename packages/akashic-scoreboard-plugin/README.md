@@ -15,7 +15,7 @@ const plugin = new ScoreboardPlugin({
   backend: {
     record(subject, patch, rejected) {
       // subject.kind === "player" なら subject.playerId の記録
-      // subject.kind === "play" なら部屋そのものの記録
+      // subject.kind === "play" ならプレイ自体の記録
       store(subject, patch);
       for (const entry of rejected) {
         logger.warn("dropped", entry.key, entry.reason);

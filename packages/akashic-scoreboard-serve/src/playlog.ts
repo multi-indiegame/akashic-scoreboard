@@ -170,7 +170,7 @@ export class SnapshotSender {
         let used = Buffer.byteLength(
             wrap(buildPayload(base, this._playId, seq, true)),
         );
-        // WHY: 部屋の記録も対象にする。上限を大きくした構成では、これだけで
+        // WHY: プレイ自体の記録も対象にする。上限を大きくした構成では、これだけで
         // 本文が上限を超えることがある。落とさずにいると 413 のまま戻らない
         for (const key of Object.keys(snapshot.play)) {
             const piece = sizeOf(key, snapshot.play[key]);
@@ -195,7 +195,7 @@ export class SnapshotSender {
             `記録が大きいため、一部を落として送りました` +
                 `（プレイヤー ${Object.keys(players).length} / ${Object.keys(snapshot.players).length} 人` +
                 (droppedPlayKeys > 0
-                    ? `、部屋の記録 ${Object.keys(play).length} / ${playKeys} 件`
+                    ? `、プレイ自体の記録 ${Object.keys(play).length} / ${playKeys} 件`
                     : "") +
                 `）`,
         );
