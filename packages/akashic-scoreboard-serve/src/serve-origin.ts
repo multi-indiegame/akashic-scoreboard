@@ -35,8 +35,7 @@ function warnIfRemote(origin: ServeOrigin): void {
     if (
         origin.hostname === "localhost" ||
         origin.hostname === "127.0.0.1" ||
-        origin.hostname === "::1" ||
-        origin.hostname === "[::1]"
+        origin.hostname === "::1"
     ) {
         return;
     }
@@ -61,7 +60,9 @@ function parseOrigin(value?: string): ServeOrigin | null {
     const protocol = url.protocol.replace(":", "");
     return {
         protocol: protocol,
-        hostname: url.hostname,
+        // WHY: IPv6 の URL では hostname が `[::1]` の形で返る。http.request の
+        // host は角括弧の無い形を期待するので、付いたままだと名前解決に失敗する
+        hostname: url.hostname.replace(/^\[|\]$/g, ""),
         port: url.port
             ? Number.parseInt(url.port, 10)
             : protocol === "https"

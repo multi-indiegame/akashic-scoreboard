@@ -47,10 +47,23 @@ export interface ServeOrigin {
  * WHY: 1 プレイにつき 1 つ作る。送り先のプレイを起動時に 1 回だけ決めるためで、
  * 複数のプレイを開いたときに他のプレイへ記録が混ざらないようにする。
  */
+/** プレイの解決をやり直す回数と間隔 */
+const RESOLVE_ATTEMPTS = 3;
+const RESOLVE_RETRY_MS = 500;
+
 export class SnapshotSender {
     _origin: ServeOrigin;
     _playId: number | null = null;
     _resolved = false;
+    /**
+     * このバックエンドが作られた時刻。
+     *
+     * WHY: 自分のプレイを見分けるのに使う。`server.external` は playId を
+     * 渡してくれないが、プレイはランナーより先に作られるので、**この時刻より
+     * 前に作られたプレイのうち最新**が自分のプレイになる。
+     */
+    _bornAt = Date.now();
+    _attempts = 0;
     _pending: RecordSnapshot | null = null;
     _inFlight = false;
     _seq = 0;
@@ -197,6 +210,7 @@ export class SnapshotSender {
      * 作られた時点で最新のプレイが自分のプレイになる。
      */
     _resolvePlayId(): void {
+        this._attempts++;
         const client = this._origin.protocol === "https" ? https : http;
         const req = client.request(
             {
@@ -210,13 +224,12 @@ export class SnapshotSender {
                 res.setEncoding("utf8");
                 res.on("data", (chunk: string) => (text += chunk));
                 res.on("end", () => {
-                    this._playId = latestPlayId(text);
+                    this._playId = ownPlayId(text, this._bornAt);
                     this._done();
                 });
             },
         );
         req.on("error", () => this._done());
-        // WHY: 待ち続けない。決められなければ latest へ送る（プレイが 1 つなら同じ）
         req.setTimeout(2000, () => {
             req.destroy();
             this._done();
@@ -228,7 +241,24 @@ export class SnapshotSender {
         if (this._resolved) {
             return;
         }
+        // WHY: 決められないまま送ると、プレイが 2 つ以上あるときに他のプレイの
+        // 画面へ流れ込む。何度か試してから諦める
+        if (this._playId == null && this._attempts < RESOLVE_ATTEMPTS) {
+            const timer = setTimeout(
+                () => this._resolvePlayId(),
+                RESOLVE_RETRY_MS,
+            );
+            timer.unref();
+            return;
+        }
         this._resolved = true;
+        if (this._playId == null) {
+            this._warn(
+                "unresolved-play",
+                "どのプレイの記録かを決められませんでした。" +
+                    "最新のプレイへ送るので、複数のプレイを開いていると記録が混ざります",
+            );
+        }
         this._flush();
     }
 
@@ -260,21 +290,43 @@ function wrap(payload: unknown): string {
     });
 }
 
-function latestPlayId(text: string): number | null {
+/**
+ * 自分のプレイを選ぶ。
+ *
+ * WHY: 単に最新のプレイを採ると、この問い合わせが返るまでに次のプレイが
+ * 作られたとき、そちらを自分のプレイだと思い込む。作られた時刻で絞る。
+ *
+ * 同じミリ秒に 2 つのプレイが作られた場合は見分けられない。`server.external`
+ * には playId が渡らないので、ここが限界。
+ */
+function ownPlayId(text: string, bornAt: number): number | null {
     try {
-        const body = JSON.parse(text) as { data?: { playId?: unknown }[] };
+        const body = JSON.parse(text) as {
+            data?: { playId?: unknown; createdAt?: unknown }[];
+        };
         const plays = body.data;
         if (!Array.isArray(plays)) {
             return null;
         }
-        let latest: number | null = null;
+        let found: { id: number; createdAt: number } | null = null;
         for (const play of plays) {
             const id = Number(play?.playId);
-            if (Number.isFinite(id) && (latest == null || id > latest)) {
-                latest = id;
+            const createdAt = Number(play?.createdAt);
+            if (!Number.isFinite(id) || !Number.isFinite(createdAt)) {
+                continue;
+            }
+            if (createdAt > bornAt) {
+                continue;
+            }
+            if (
+                !found ||
+                createdAt > found.createdAt ||
+                (createdAt === found.createdAt && id > found.id)
+            ) {
+                found = { id: id, createdAt: createdAt };
             }
         }
-        return latest;
+        return found ? found.id : null;
     } catch (_err) {
         return null;
     }
