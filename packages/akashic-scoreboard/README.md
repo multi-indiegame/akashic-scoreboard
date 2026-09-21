@@ -45,9 +45,11 @@ scoreboard.setPlayerRecord(playerId, { stage: null }); // 削除
 
 `playerId` は、そのプレイヤーについてコンテンツが観測している in-game playerId（`ev.player.id` の値）を渡してください。
 
-## いちばん起きやすい誤り
+## アクティブインスタンス以外では登録されません
 
-**アクティブインスタンスに通らない分岐の中で呼ぶと、記録は登録されません。**
+**このライブラリは各プレイヤー(パッシブインスタンス)が自分のスコアを申告するためのものではありません。** 集計されたスコアをアクティブインスタンスが代表して実行基盤に申告するためのものです。
+
+したがって、**アクティブインスタンスに通らない分岐の中で呼ぶと、記録は登録されません。**
 
 ```javascript
 // 登録されない。この分岐はプレイヤーの画面でしか通らない
@@ -63,9 +65,10 @@ scene.onMessage.add((ev) => {
 });
 ```
 
-全インスタンスで実行する必要はありません。登録される条件は「アクティブインスタンスで実行されること」だけです。次のように明示的に囲んでも構いません（動作は変わりませんが、意図がコードに残ります）。
+なお、次のように明示的に記述しておくと意図をコードに残しやすいです。
 
 ```javascript
+// 動作は変わらない。アクティブインスタンスが登録する、という意図を残すために書く
 if (g.game.isActiveInstance()) {
   scoreboard.setPlayerRecord(playerId, { score: score });
 }
@@ -118,6 +121,7 @@ if (g.game.isActiveInstance()) {
 ## 動作確認
 
 `akashic serve` で確かめるには [@multi-indiegame/akashic-scoreboard-serve](../akashic-scoreboard-serve) を使ってください。
+ただし、[`@akashic-extension/coe`](https://github.com/akashic-games/coe) を使ったコンテンツでは、代わりに [@multi-indiegame/akashic-scoreboard-serve-coe](../akashic-scoreboard-serve-coe) を使ってください。
 
 ## 実行基盤を作る方は
 
